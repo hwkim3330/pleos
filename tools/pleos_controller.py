@@ -34,6 +34,7 @@ state = {
 }
 
 route_stop = threading.Event()
+route_thread = None
 
 
 def run(cmd):
@@ -129,24 +130,39 @@ def set_speed(kph):
 def route_loop(speed_kph):
     route_stop.clear()
     state["routeRunning"] = True
-    set_drive("drive")
-    set_speed(speed_kph)
-    while not route_stop.is_set():
-        for start, end in zip(ROUTE, ROUTE[1:]):
-            for i in range(24):
-                if route_stop.is_set():
-                    break
-                t = i / 24
-                lat = start[0] + (end[0] - start[0]) * t
-                lon = start[1] + (end[1] - start[1]) * t
-                set_geo(lat, lon)
-                set_speed(speed_kph + math.sin(time.time()) * 3)
-                time.sleep(0.8)
+    try:
+        set_drive("drive")
+        set_speed(speed_kph)
+        while not route_stop.is_set():
+            for start, end in zip(ROUTE, ROUTE[1:]):
+                for i in range(24):
+                    if route_stop.is_set():
+                        break
+                    t = i / 24
+                    lat = start[0] + (end[0] - start[0]) * t
+                    lon = start[1] + (end[1] - start[1]) * t
+                    set_geo(lat, lon)
+                    if route_stop.is_set():
+                        break
+                    set_speed(speed_kph + math.sin(time.time()) * 3)
+                    time.sleep(0.8)
             if route_stop.is_set():
                 break
-        if route_stop.is_set():
-            break
+    finally:
+        state["routeRunning"] = False
+
+
+def stop_route():
+    global route_thread
+    route_stop.set()
+    if route_thread and route_thread.is_alive():
+        route_thread.join(timeout=2.0)
     state["routeRunning"] = False
+    set_speed(0)
+    set_drive("park")
+    time.sleep(0.2)
+    set_speed(0)
+    return set_drive("park")
 
 
 def html():
@@ -233,7 +249,11 @@ async function call(path) {{
 function geo() {{ call(`/api/geo?lat=${{ilat.value}}&lon=${{ilon.value}}`); }}
 function preset(lat, lon) {{ ilat.value=lat; ilon.value=lon; geo(); }}
 function speed() {{ call(`/api/speed?kph=${{ispeed.value}}`); }}
-function quick(v) {{ ispeed.value=v; sval.textContent=v; speed(); }}
+function quick(v) {{
+  ispeed.value=v; sval.textContent=v;
+  if (Number(v) === 0) {{ stopRoute(); return; }}
+  speed();
+}}
 function drive(v) {{ call(`/api/drive?state=${{v}}`); }}
 function startRoute() {{ call(`/api/route/start?kph=${{ispeed.value || 45}}`); }}
 function stopRoute() {{ call('/api/route/stop'); }}
@@ -261,6 +281,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        global route_thread
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
         try:
@@ -284,13 +305,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(state)
             elif parsed.path == "/api/route/start":
                 route_stop.set()
-                time.sleep(0.2)
-                threading.Thread(target=route_loop, args=(float(qs.get("kph", ["45"])[0]),), daemon=True).start()
+                if route_thread and route_thread.is_alive():
+                    route_thread.join(timeout=2.0)
+                route_thread = threading.Thread(
+                    target=route_loop,
+                    args=(float(qs.get("kph", ["45"])[0]),),
+                    daemon=True,
+                )
+                route_thread.start()
                 self.send_json(state)
             elif parsed.path == "/api/route/stop":
-                route_stop.set()
-                set_speed(0)
-                set_drive("park")
+                stop_route()
                 self.send_json(state)
             else:
                 self.send_error(404)
