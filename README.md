@@ -4,6 +4,28 @@ Flutter 기반 Pleos Connect IVI 데모 앱입니다. 한 화면 안에서 OSM �
 
 앱 표시 이름은 `Drive Pilot`이고 Android package/activity는 `com.example.mrm_multimodal_demo/.MainActivity`입니다.
 
+## PLEOS Multimode 3D Viewer
+
+Autoware 멀티모드 전환 콘솔은 `apps/pleos_multimode`에 별도 Flutter 앱으로 추가되어 있습니다.
+
+- 앱 표시 이름: `PLEOS Multimode`
+- Android package/activity: `com.example.pleosmrmviewer/.MainActivity`
+- 3D 모델: `roii.glb`
+- 모드: Triple sensor, LiDAR+GNSS, LiDAR+Camera, GNSS+Camera, LiDAR only, Camera only, MRM safe stop
+- TSN 스위치 구성: `TSN-FL`, `TSN-FR`, `TSN-R`
+
+실행:
+
+```bash
+cd apps/pleos_multimode
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --debug
+adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk
+adb -s emulator-5554 shell am start -n com.example.pleosmrmviewer/.MainActivity
+```
+
 ## What This Demo Does
 
 - OSM 기반 네비게이션 화면
