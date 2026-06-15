@@ -12,6 +12,32 @@ HOST = "127.0.0.1"
 PORT = 8765
 APP_ACTIVITY = "com.example.mrm_multimodal_demo/.MainActivity"
 APP_RECEIVER = "com.example.mrm_multimodal_demo/.DrivePilotControlReceiver"
+MULTIMODE_ACTIVITY = "com.example.pleosmrmviewer/.MainActivity"
+RECONFIG_ACTIVITY = "com.example.pleosreconfig/.MainActivity"
+CBOR_ACTION = "com.pleos.SIMULATE_CBOR"
+
+FAULTS = {
+    "clear-lidar": {
+        "label": "Clear LiDAR fault",
+        "hex": "A266616374696F6E0062696403",
+    },
+    "clear-mrm": {
+        "label": "Clear MRM fault",
+        "hex": "A266616374696F6E006269641833",
+    },
+    "front-lidar-degraded": {
+        "label": "Front LiDAR degraded",
+        "hex": "A566616374696F6E016269640364636F64651867667461726765747046726F6E7443656E7465724C6964617268736576657269747901",
+    },
+    "rear-zc-warning": {
+        "label": "Rear TSN/ZC warning",
+        "hex": "A566616374696F6E016269640164636F646518656674617267657466526561725A4368736576657269747902",
+    },
+    "mrm-stop": {
+        "label": "MRM safe stop",
+        "hex": "A566616374696F6E01626964183364636F6465190132667461726765747146726F6E7443656E74657243616D65726168736576657269747903",
+    },
+}
 
 ROUTE = [
     (37.40180, 127.10895),
@@ -100,6 +126,26 @@ def open_drive_pilot():
         "--es",
         "driveState",
         str(state["driveState"]),
+    )
+
+
+def open_activity(component):
+    return adb("shell", "am", "start", "-n", component)
+
+
+def send_cbor_fault(name):
+    fault = FAULTS.get(name)
+    if not fault:
+        raise ValueError(f"unknown fault: {name}")
+    return adb(
+        "shell",
+        "am",
+        "broadcast",
+        "-a",
+        CBOR_ACTION,
+        "--es",
+        "cbor_hex",
+        fault["hex"],
     )
 
 
@@ -225,6 +271,7 @@ def html():
     <section>
       <h2>Demo Route</h2>
       <p class="row">
+        <button onclick="openApp('drive')">Open Drive Pilot</button>
         <button class="alt" onclick="startRoute()">Start Route</button>
         <button class="warn" onclick="stopRoute()">Stop Route</button>
       </p>
@@ -235,6 +282,23 @@ def html():
         <button onclick="quick(30)">Urban 30</button>
         <button onclick="quick(80)">Highway 80</button>
         <button class="warn" onclick="quick(0)">Stop</button>
+      </p>
+    </section>
+    <section>
+      <h2>3D Consoles</h2>
+      <p class="row">
+        <button onclick="openApp('multimode')">Open Multimode</button>
+        <button onclick="openApp('reconfig')">Open Reconfig</button>
+      </p>
+    </section>
+    <section>
+      <h2>CBOR Faults</h2>
+      <p class="row">
+        <button onclick="fault('front-lidar-degraded')">LiDAR degraded</button>
+        <button onclick="fault('rear-zc-warning')">Rear TSN fault</button>
+        <button class="warn" onclick="fault('mrm-stop')">MRM stop</button>
+        <button class="alt" onclick="fault('clear-lidar')">Clear LiDAR</button>
+        <button class="alt" onclick="fault('clear-mrm')">Clear MRM</button>
       </p>
     </section>
   </div>
@@ -255,6 +319,8 @@ function quick(v) {{
   speed();
 }}
 function drive(v) {{ call(`/api/drive?state=${{v}}`); }}
+function openApp(v) {{ call(`/api/open?app=${{v}}`); }}
+function fault(v) {{ call(`/api/fault?name=${{v}}`); }}
 function startRoute() {{ call(`/api/route/start?kph=${{ispeed.value || 45}}`); }}
 function stopRoute() {{ call('/api/route/stop'); }}
 async function refresh() {{
@@ -302,6 +368,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(state)
             elif parsed.path == "/api/drive":
                 set_drive(qs["state"][0])
+                self.send_json(state)
+            elif parsed.path == "/api/open":
+                app = qs.get("app", ["drive"])[0]
+                component = {
+                    "drive": APP_ACTIVITY,
+                    "multimode": MULTIMODE_ACTIVITY,
+                    "reconfig": RECONFIG_ACTIVITY,
+                }.get(app)
+                if component is None:
+                    raise ValueError(f"unknown app: {app}")
+                open_activity(component)
+                self.send_json(state)
+            elif parsed.path == "/api/fault":
+                send_cbor_fault(qs["name"][0])
                 self.send_json(state)
             elif parsed.path == "/api/route/start":
                 route_stop.set()

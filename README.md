@@ -223,6 +223,23 @@ The controller opens `http://127.0.0.1:8765` and exposes:
 - `Drive/Park/Reverse`: sends AAOS driving state and app state override
 - `Start Route`: starts a demo route with moving GPS and speed
 - `Stop Route`: stops route, sends `speedKph=0`, and forces `park`
+- `Open Drive Pilot`: opens the Pleos control app
+- `Open Multimode`: opens the 3D Autoware multimode viewer
+- `Open Reconfig`: opens the full PLEOS reconfiguration console
+- `CBOR Faults`: injects sensor/TSN/MRM events into the 3D apps
+
+Control scope for the demo:
+
+| Control | Why it matters |
+| --- | --- |
+| Speed | validates speed-cap, crawl, and MRM safe-stop states |
+| Drive state | switches park/drive/reverse/neutral for IVI and AAOS behavior |
+| GPS route | validates localization, route following, and Autoware stack switching |
+| Sensor fault | drives LiDAR/GNSS/Camera availability and multimode transition |
+| TSN/Zonal fault | validates front/rear switch degradation and network reconfiguration |
+| MRM | forces minimum-risk maneuver and recovery flow |
+
+CBOR in this project means `Concise Binary Object Representation`: a compact binary payload used here to deliver fault events from native Android/ADB into Flutter. The app decodes the hex string with Jackson CBOR, converts it to `{action, id, code, target, severity}`, then updates the fault provider and 3D warning state.
 
 Controller HTTP endpoints:
 
@@ -233,6 +250,14 @@ curl "http://127.0.0.1:8765/api/speed?kph=42"
 curl "http://127.0.0.1:8765/api/drive?state=park"
 curl "http://127.0.0.1:8765/api/drive?state=drive"
 curl "http://127.0.0.1:8765/api/drive?state=reverse"
+curl "http://127.0.0.1:8765/api/open?app=drive"
+curl "http://127.0.0.1:8765/api/open?app=multimode"
+curl "http://127.0.0.1:8765/api/open?app=reconfig"
+curl "http://127.0.0.1:8765/api/fault?name=front-lidar-degraded"
+curl "http://127.0.0.1:8765/api/fault?name=rear-zc-warning"
+curl "http://127.0.0.1:8765/api/fault?name=mrm-stop"
+curl "http://127.0.0.1:8765/api/fault?name=clear-lidar"
+curl "http://127.0.0.1:8765/api/fault?name=clear-mrm"
 curl "http://127.0.0.1:8765/api/route/start?kph=45"
 curl "http://127.0.0.1:8765/api/route/stop"
 ```

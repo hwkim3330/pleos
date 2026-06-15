@@ -19,6 +19,7 @@ class CborFaultService(private val context: Context) {
     }
 
     private var eventSink: EventChannel.EventSink? = null
+    private var isListening = false
     private val mainThreadHandler = Handler(Looper.getMainLooper())
     private val cborMapper = ObjectMapper(CBORFactory())
     private val jsonMapper = ObjectMapper()
@@ -38,16 +39,23 @@ class CborFaultService(private val context: Context) {
     }
 
     fun startListening() {
+        if (isListening) {
+            Log.d(TAG, "CborFaultService is already listening")
+            return
+        }
         val filter = IntentFilter(ACTION_SIMULATE_CBOR)
         context.registerReceiver(broadcastReceiver, filter, Context.RECEIVER_EXPORTED)
+        isListening = true
         Log.d(TAG, "CborFaultService started listening for broadcasts")
     }
 
     fun stopListening() {
         try {
             context.unregisterReceiver(broadcastReceiver)
+            isListening = false
             Log.d(TAG, "CborFaultService stopped listening")
         } catch (e: IllegalArgumentException) {
+            isListening = false
             Log.w(TAG, "Receiver was not registered")
         }
     }

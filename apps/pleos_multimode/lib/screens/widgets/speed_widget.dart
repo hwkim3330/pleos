@@ -46,9 +46,21 @@ class _SpeedWidgetState extends State<SpeedWidget>
 
   Future<void> _checkPermission() async {
     setState(() => _isLoading = true);
-    final bool hasPermission = await _permissionChannel.invokeMethod(
-      'requestCarSpeedPermission',
-    );
+    final bool hasPermission;
+    try {
+      hasPermission = await _permissionChannel.invokeMethod<bool>(
+            'requestCarSpeedPermission',
+          ) ??
+          false;
+    } on PlatformException {
+      if (!mounted) return;
+      setState(() {
+        _hasCarSpeedPermission = false;
+        _isLoading = false;
+      });
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       _hasCarSpeedPermission = hasPermission;
       _isLoading = false;
@@ -74,7 +86,8 @@ class _SpeedWidgetState extends State<SpeedWidget>
               if (snapshot.hasError || !snapshot.hasData) {
                 return _buildGauge(_currentSpeed);
               }
-              final value = snapshot.data as double;
+              final raw = snapshot.data;
+              final value = raw is num ? raw.toDouble() : _currentSpeed;
               _currentSpeed = value;
               _animateSpeed(value);
               return _buildGauge(value);

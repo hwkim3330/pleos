@@ -31,6 +31,17 @@ class MainActivity : FlutterActivity() {
     // CBOR Fault Service
     private var cborFaultService: CborFaultService? = null
 
+    private fun asFloat(value: Any?): Float? {
+        return when (value) {
+            is Float -> value
+            is Double -> value.toFloat()
+            is Int -> value.toFloat()
+            is Long -> value.toFloat()
+            is Number -> value.toFloat()
+            else -> null
+        }
+    }
+
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -67,7 +78,11 @@ class MainActivity : FlutterActivity() {
                             carPropertyCallback = object : CarPropertyManager.CarPropertyEventCallback {
                                 override fun onChangeEvent(value: CarPropertyValue<*>) {
                                     if (value.propertyId == VehiclePropertyIds.PERF_VEHICLE_SPEED) {
-                                        val speedInMps = value.value as Float
+                                        val speedInMps = asFloat(value.value)
+                                        if (speedInMps == null) {
+                                            Log.w("MainActivity", "지원하지 않는 속도 값 타입: ${value.value?.javaClass?.name}")
+                                            return
+                                        }
                                         val speedInKmh = speedInMps * 3.6f
                                         mainThreadHandler.post { events?.success(speedInKmh) }
                                     }
