@@ -28,15 +28,15 @@ class LabelHotspotConfig {
 /// Label Hotspot 목록
 const List<LabelHotspotConfig> labelHotspots = [
   LabelHotspotConfig(
-    slotName: 'frontZC',
-    label: 'TSN-FL\nFront switch',
+    slotName: 'frontZCRight',
+    label: 'TSN-FR\nFront switch',
     position: '-2.45m 4m 14m',
     dataTarget: '-2.45m 4m 14m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   LabelHotspotConfig(
-    slotName: 'frontZCRight',
-    label: 'TSN-FR\nFront switch',
+    slotName: 'frontZCLeft',
+    label: 'TSN-FL\nFront switch',
     position: '2.45m 4m 14m',
     dataTarget: '2.45m 4m 14m',
     dataOrbit: '135deg 45deg 2.5m',

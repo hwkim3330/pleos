@@ -18,7 +18,7 @@ class CarViewerScreen extends ConsumerStatefulWidget {
 }
 
 class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
-  bool _labelsVisible = false;
+  bool _labelsVisible = true;
   bool _faultSheetVisible = false;
 
   @override

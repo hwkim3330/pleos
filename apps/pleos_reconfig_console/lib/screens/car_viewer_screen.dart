@@ -15,7 +15,7 @@ class CarViewerScreen extends ConsumerStatefulWidget {
 }
 
 class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
-  var _labelsVisible = false;
+  var _labelsVisible = true;
   var _topologyVisible = false;
   var _metricsVisible = true;
   _ScenarioDef _selectedScenario = _ScenarioDef.values.first;
