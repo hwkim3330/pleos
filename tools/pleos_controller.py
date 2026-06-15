@@ -20,22 +20,37 @@ FAULTS = {
     "clear-lidar": {
         "label": "Clear LiDAR fault",
         "hex": "A266616374696F6E0062696403",
+        "decoded": {"action": 0, "id": 3},
+        "target": "FrontCenterLidar",
+        "expected": "Remove front LiDAR warning",
     },
     "clear-mrm": {
         "label": "Clear MRM fault",
         "hex": "A266616374696F6E006269641833",
+        "decoded": {"action": 0, "id": 51},
+        "target": "FrontCenterCamera",
+        "expected": "Remove MRM stop warning",
     },
     "front-lidar-degraded": {
         "label": "Front LiDAR degraded",
         "hex": "A566616374696F6E016269640364636F64651867667461726765747046726F6E7443656E7465724C6964617268736576657269747901",
+        "decoded": {"action": 1, "id": 3, "code": 103, "target": "FrontCenterLidar", "severity": 1},
+        "target": "FrontCenterLidar",
+        "expected": "Autoware switches away from weak front LiDAR confidence",
     },
     "rear-zc-warning": {
         "label": "Rear TSN/ZC warning",
         "hex": "A566616374696F6E016269640164636F646518656674617267657466526561725A4368736576657269747902",
+        "decoded": {"action": 1, "id": 1, "code": 101, "target": "RearZC", "severity": 2},
+        "target": "RearZC",
+        "expected": "Rear zonal/TSN degradation and reconfiguration",
     },
     "mrm-stop": {
         "label": "MRM safe stop",
         "hex": "A566616374696F6E01626964183364636F6465190132667461726765747146726F6E7443656E74657243616D65726168736576657269747903",
+        "decoded": {"action": 1, "id": 51, "code": 306, "target": "FrontCenterCamera", "severity": 3},
+        "target": "FrontCenterCamera",
+        "expected": "Trigger Autoware MRM behavior and safe stop trajectory",
     },
 }
 
@@ -137,6 +152,10 @@ def send_cbor_fault(name):
     fault = FAULTS.get(name)
     if not fault:
         raise ValueError(f"unknown fault: {name}")
+    return send_cbor_hex(fault["hex"])
+
+
+def send_cbor_hex(hex_value):
     return adb(
         "shell",
         "am",
@@ -145,7 +164,7 @@ def send_cbor_fault(name):
         CBOR_ACTION,
         "--es",
         "cbor_hex",
-        fault["hex"],
+        hex_value,
     )
 
 
@@ -212,6 +231,7 @@ def stop_route():
 
 
 def html():
+    faults_json = json.dumps(FAULTS, ensure_ascii=False)
     return f"""<!doctype html>
 <html>
 <head>
@@ -219,96 +239,216 @@ def html():
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Pleos Vehicle Controller</title>
   <style>
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#eef2f6; color:#111827; }}
-    main {{ max-width: 980px; margin: 0 auto; padding: 28px; }}
-    h1 {{ font-size: 28px; margin: 0 0 6px; }}
-    .sub {{ color:#64748b; font-weight:700; margin-bottom:22px; }}
-    .grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }}
-    section {{ background:white; border-radius:12px; padding:18px; box-shadow:0 10px 26px rgba(15,23,42,.08); }}
-    label {{ display:block; font-size:12px; font-weight:900; color:#64748b; margin:12px 0 6px; }}
-    input, select {{ width:100%; box-sizing:border-box; height:40px; border:1px solid #d7dde7; border-radius:9px; padding:0 10px; font-weight:800; }}
-    button {{ height:40px; border:0; border-radius:9px; padding:0 14px; font-weight:900; color:white; background:#2563eb; cursor:pointer; }}
-    button.alt {{ background:#10b981; }}
-    button.warn {{ background:#ef4444; }}
+    :root {{
+      --bg:#f4f6f8; --panel:#ffffff; --panel2:#f8fafc; --line:#d9e0e8;
+      --text:#172033; --muted:#667085; --blue:#2563eb; --green:#079455;
+      --amber:#b54708; --red:#d92d20; --ink:#111827; --term:#101828;
+    }}
+    * {{ box-sizing:border-box; }}
+    body {{
+      margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    }}
+    main {{ padding:18px; max-width:1680px; margin:0 auto; }}
+    header {{
+      height:56px; display:flex; align-items:center; justify-content:space-between;
+      border-bottom:1px solid var(--line); margin-bottom:14px;
+    }}
+    h1 {{ font-size:18px; margin:0; letter-spacing:0; }}
+    h2 {{ font-size:12px; margin:0 0 10px; color:var(--muted); text-transform:uppercase; }}
+    label {{ display:block; font-size:11px; font-weight:800; color:var(--muted); margin:10px 0 5px; }}
+    input, textarea {{
+      width:100%; border:1px solid var(--line); background:white; color:var(--text);
+      border-radius:6px; padding:8px 10px; font:700 12px ui-monospace,SFMono-Regular,Menlo,monospace;
+    }}
+    textarea {{ min-height:108px; resize:vertical; line-height:1.45; }}
+    button {{
+      min-height:34px; border:1px solid #c8d1dc; border-radius:6px; background:#fff;
+      color:var(--text); padding:0 10px; font-weight:800; cursor:pointer;
+    }}
+    button:hover {{ border-color:var(--blue); color:var(--blue); }}
+    button.primary {{ background:var(--blue); border-color:var(--blue); color:white; }}
+    button.green {{ background:var(--green); border-color:var(--green); color:white; }}
+    button.red {{ background:var(--red); border-color:var(--red); color:white; }}
+    button.ghost {{ background:var(--panel2); }}
+    .status {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
+    .chip {{
+      border:1px solid var(--line); background:var(--panel); border-radius:999px;
+      padding:7px 10px; font-size:12px; font-weight:900; color:var(--muted);
+    }}
+    .chip b {{ color:var(--ink); }}
+    .layout {{ display:grid; grid-template-columns:320px minmax(460px,1fr) 420px; gap:12px; min-height:calc(100vh - 90px); }}
+    .panel {{
+      background:var(--panel); border:1px solid var(--line); border-radius:8px;
+      overflow:hidden; box-shadow:0 8px 20px rgba(16,24,40,.05);
+    }}
+    .panel-inner {{ padding:12px; }}
+    .section {{ border-top:1px solid var(--line); padding:12px; }}
+    .section:first-child {{ border-top:0; }}
     .row {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
-    pre {{ white-space:pre-wrap; background:#0f172a; color:#dbeafe; border-radius:10px; padding:14px; min-height:120px; }}
-    .stat {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0; }}
-    .pill {{ background:#eaf2ff; color:#2563eb; border-radius:10px; padding:10px; font-weight:900; }}
+    .grid2 {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
+    .speedline {{ display:grid; grid-template-columns:1fr 64px; gap:8px; align-items:center; }}
+    input[type=range] {{ padding:0; }}
+    .quick button {{ flex:1 1 80px; }}
+    .terminal {{
+      height:100%; display:flex; flex-direction:column; background:var(--term); color:#d0d5dd;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    }}
+    .term-head {{
+      display:flex; justify-content:space-between; align-items:center; padding:10px 12px;
+      border-bottom:1px solid #344054; background:#182230;
+    }}
+    .term-log {{ flex:1; overflow:auto; padding:12px; white-space:pre-wrap; font-size:12px; line-height:1.5; }}
+    .prompt {{ display:grid; grid-template-columns:56px 1fr 70px; gap:8px; padding:10px; border-top:1px solid #344054; background:#182230; }}
+    .prompt input {{ background:#0b1220; border-color:#344054; color:#e4e7ec; }}
+    .prompt span {{ align-self:center; color:#47cd89; font-weight:900; }}
+    .fault-list {{ display:grid; gap:8px; }}
+    .fault-card {{
+      width:100%; min-height:58px; text-align:left; border:1px solid var(--line); background:var(--panel2);
+      display:block; padding:8px 10px;
+    }}
+    .fault-card strong {{ display:block; font-size:12px; color:var(--text); }}
+    .fault-card small {{ display:block; margin-top:3px; color:var(--muted); font-weight:700; }}
+    .fault-card.active {{ border-color:var(--blue); box-shadow:0 0 0 2px rgba(37,99,235,.12); }}
+    .kv {{ display:grid; grid-template-columns:92px 1fr; gap:6px 10px; font-size:12px; }}
+    .kv div:nth-child(odd) {{ color:var(--muted); font-weight:900; }}
+    .hexbox {{ word-break:break-all; background:#f2f4f7; border:1px solid var(--line); border-radius:6px; padding:10px; font:700 11px ui-monospace,SFMono-Regular,Menlo,monospace; }}
+    .decoded {{ background:#101828; color:#d0d5dd; border-radius:6px; padding:10px; font:12px ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; }}
+    .hint {{ color:var(--muted); font-size:12px; line-height:1.45; margin:8px 0 0; }}
+    @media (max-width:1180px) {{
+      .layout {{ grid-template-columns:1fr; }}
+      .terminal {{ min-height:460px; }}
+    }}
   </style>
 </head>
 <body>
 <main>
-  <h1>Pleos Vehicle Controller</h1>
-  <div class="sub">Mac에서 ADB로 Pleos 에뮬레이터 위치/속도/주행상태를 테스트 주입</div>
-  <div class="stat">
-    <div class="pill">lat <span id="lat">{state["lat"]:.5f}</span></div>
-    <div class="pill">lon <span id="lon">{state["lon"]:.5f}</span></div>
-    <div class="pill">speed <span id="speed">{state["speedKph"]:.0f}</span> km/h</div>
-    <div class="pill">state <span id="drive">{state["driveState"]}</span></div>
+  <header>
+    <div>
+      <h1>PLEOS Control Terminal</h1>
+      <div class="hint">ADB vehicle control, Autoware mode trigger, CBOR fault injection</div>
+    </div>
+    <div class="status">
+      <div class="chip">lat <b id="lat">{state["lat"]:.5f}</b></div>
+      <div class="chip">lon <b id="lon">{state["lon"]:.5f}</b></div>
+      <div class="chip">speed <b id="speed">{state["speedKph"]:.0f}</b> km/h</div>
+      <div class="chip">gear <b id="drive">{state["driveState"]}</b></div>
+      <div class="chip">route <b id="route">idle</b></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="panel">
+      <div class="section">
+        <h2>Applications</h2>
+        <div class="row">
+          <button class="primary" onclick="openApp('drive')">Drive Pilot</button>
+          <button onclick="openApp('reconfig')">Reconfig</button>
+          <button onclick="openApp('multimode')">Multimode</button>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Vehicle State</h2>
+        <div class="speedline">
+          <input id="ispeed" type="range" min="0" max="130" value="{state["speedKph"]}" oninput="sval.value=this.value">
+          <input id="sval" value="{state["speedKph"]}" oninput="ispeed.value=this.value">
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button onclick="speed()">Set Speed</button>
+          <button class="green" onclick="drive('drive')">Drive</button>
+          <button onclick="drive('park')">Park</button>
+          <button onclick="drive('reverse')">Reverse</button>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Location</h2>
+        <div class="grid2">
+          <div><label>Latitude</label><input id="ilat" value="{state["lat"]:.7f}"></div>
+          <div><label>Longitude</label><input id="ilon" value="{state["lon"]:.7f}"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button onclick="geo()">Set GPS</button>
+          <button onclick="preset(37.40180,127.10895)">Start</button>
+          <button onclick="preset(37.40636,127.11578)">Goal</button>
+        </div>
+      </div>
+      <div class="section quick">
+        <h2>Route / Quick Commands</h2>
+        <div class="row">
+          <button class="green" onclick="startRoute()">Route</button>
+          <button class="red" onclick="stopRoute()">Stop</button>
+          <button onclick="quick(30)">30</button>
+          <button onclick="quick(80)">80</button>
+          <button onclick="quick(0)">0</button>
+        </div>
+      </div>
+    </aside>
+
+    <section class="panel terminal">
+      <div class="term-head">
+        <strong>live command log</strong>
+        <div class="row"><button class="ghost" onclick="clearLog()">Clear</button></div>
+      </div>
+      <div id="out" class="term-log"></div>
+      <div class="prompt">
+        <span>pleos&gt;</span>
+        <input id="cmd" placeholder="try: open reconfig, speed 45, gear drive, fault mrm-stop, cbor A266..." onkeydown="if(event.key==='Enter') runPrompt()">
+        <button class="primary" onclick="runPrompt()">Run</button>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <div class="section">
+        <h2>CBOR Fault Presets</h2>
+        <div id="faults" class="fault-list"></div>
+      </div>
+      <div class="section">
+        <h2>CBOR Inspector</h2>
+        <div class="kv">
+          <div>Name</div><div id="faultName">-</div>
+          <div>Target</div><div id="faultTarget">-</div>
+          <div>Expected</div><div id="faultExpected">-</div>
+        </div>
+        <label>Raw Hex</label>
+        <div id="faultHex" class="hexbox">Select a fault preset or paste raw CBOR.</div>
+        <label>Decoded Fields</label>
+        <div id="faultDecoded" class="decoded">{{}}</div>
+        <div class="row" style="margin-top:10px">
+          <button class="red" onclick="sendSelectedFault()">Send Selected</button>
+          <button onclick="copyHex()">Copy Hex</button>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Raw CBOR</h2>
+        <textarea id="rawHex" placeholder="Paste CBOR hex here"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" onclick="sendRawCbor()">Send Raw</button>
+          <button onclick="inspectRaw()">Inspect Only</button>
+        </div>
+      </div>
+    </aside>
   </div>
-  <div class="grid">
-    <section>
-      <h2>Location</h2>
-      <label>Latitude</label><input id="ilat" value="{state["lat"]:.7f}">
-      <label>Longitude</label><input id="ilon" value="{state["lon"]:.7f}">
-      <p class="row">
-        <button onclick="geo()">Set GPS</button>
-        <button class="alt" onclick="preset(37.40180,127.10895)">Pangyo Start</button>
-        <button class="alt" onclick="preset(37.40636,127.11578)">Destination</button>
-      </p>
-    </section>
-    <section>
-      <h2>Vehicle</h2>
-      <label>Speed km/h</label><input id="ispeed" type="range" min="0" max="130" value="{state["speedKph"]}" oninput="sval.textContent=this.value">
-      <div><b id="sval">{state["speedKph"]}</b> km/h</div>
-      <p class="row">
-        <button onclick="speed()">Set Speed</button>
-        <button onclick="drive('drive')">Drive</button>
-        <button onclick="drive('park')">Park</button>
-        <button onclick="drive('reverse')">Reverse</button>
-      </p>
-    </section>
-    <section>
-      <h2>Demo Route</h2>
-      <p class="row">
-        <button onclick="openApp('drive')">Open Drive Pilot</button>
-        <button class="alt" onclick="startRoute()">Start Route</button>
-        <button class="warn" onclick="stopRoute()">Stop Route</button>
-      </p>
-    </section>
-    <section>
-      <h2>Quick Events</h2>
-      <p class="row">
-        <button onclick="quick(30)">Urban 30</button>
-        <button onclick="quick(80)">Highway 80</button>
-        <button class="warn" onclick="quick(0)">Stop</button>
-      </p>
-    </section>
-    <section>
-      <h2>3D Consoles</h2>
-      <p class="row">
-        <button onclick="openApp('multimode')">Open Multimode</button>
-        <button onclick="openApp('reconfig')">Open Reconfig</button>
-      </p>
-    </section>
-    <section>
-      <h2>CBOR Faults</h2>
-      <p class="row">
-        <button onclick="fault('front-lidar-degraded')">LiDAR degraded</button>
-        <button onclick="fault('rear-zc-warning')">Rear TSN fault</button>
-        <button class="warn" onclick="fault('mrm-stop')">MRM stop</button>
-        <button class="alt" onclick="fault('clear-lidar')">Clear LiDAR</button>
-        <button class="alt" onclick="fault('clear-mrm')">Clear MRM</button>
-      </p>
-    </section>
-  </div>
-  <h2>ADB Output</h2>
-  <pre id="out"></pre>
 </main>
 <script>
-async function call(path) {{
-  const r = await fetch(path); const j = await r.json();
-  out.textContent = j.last || JSON.stringify(j,null,2); refresh();
+const FAULTS = {faults_json};
+let selectedFault = 'front-lidar-degraded';
+let lines = ['PLEOS control terminal ready.', 'Target ADB serial: {ADB_SERIAL}', ''];
+
+function append(title, payload) {{
+  const stamp = new Date().toLocaleTimeString();
+  lines.push(`[${{stamp}}] ${{title}}`);
+  if (payload) lines.push(payload.trim());
+  lines.push('');
+  out.textContent = lines.slice(-180).join('\\n');
+  out.scrollTop = out.scrollHeight;
+}}
+
+async function call(path, label) {{
+  const r = await fetch(path);
+  const j = await r.json();
+  append(label || path, j.last || JSON.stringify(j,null,2));
+  refresh();
+  return j;
 }}
 function geo() {{ call(`/api/geo?lat=${{ilat.value}}&lon=${{ilon.value}}`); }}
 function preset(lat, lon) {{ ilat.value=lat; ilon.value=lon; geo(); }}
@@ -318,16 +458,77 @@ function quick(v) {{
   if (Number(v) === 0) {{ stopRoute(); return; }}
   speed();
 }}
-function drive(v) {{ call(`/api/drive?state=${{v}}`); }}
-function openApp(v) {{ call(`/api/open?app=${{v}}`); }}
-function fault(v) {{ call(`/api/fault?name=${{v}}`); }}
-function startRoute() {{ call(`/api/route/start?kph=${{ispeed.value || 45}}`); }}
-function stopRoute() {{ call('/api/route/stop'); }}
+function drive(v) {{ call(`/api/drive?state=${{v}}`, `gear ${{v}}`); }}
+function openApp(v) {{ call(`/api/open?app=${{v}}`, `open ${{v}}`); }}
+function fault(v) {{ selectFault(v); call(`/api/fault?name=${{v}}`, `fault ${{v}}`); }}
+function startRoute() {{ call(`/api/route/start?kph=${{ispeed.value || 45}}`, 'route start'); }}
+function stopRoute() {{ call('/api/route/stop', 'route stop'); }}
+function clearLog() {{ lines = ['log cleared']; out.textContent = lines.join('\\n'); }}
+
+function renderFaults() {{
+  faults.innerHTML = Object.entries(FAULTS).map(([key, fault]) => `
+    <button class="fault-card" id="fault-${{key}}" onclick="selectFault('${{key}}')">
+      <strong>${{fault.label}}</strong>
+      <small>${{fault.target}} · ${{fault.expected}}</small>
+    </button>
+  `).join('');
+  selectFault(selectedFault);
+}}
+
+function selectFault(key) {{
+  selectedFault = key;
+  const fault = FAULTS[key];
+  document.querySelectorAll('.fault-card').forEach(el => el.classList.remove('active'));
+  const active = document.getElementById(`fault-${{key}}`);
+  if (active) active.classList.add('active');
+  faultName.textContent = fault?.label || '-';
+  faultTarget.textContent = fault?.target || '-';
+  faultExpected.textContent = fault?.expected || '-';
+  faultHex.textContent = fault?.hex || '';
+  faultDecoded.textContent = JSON.stringify(fault?.decoded || {{}}, null, 2);
+  rawHex.value = fault?.hex || '';
+}}
+
+function sendSelectedFault() {{ fault(selectedFault); }}
+function sendRawCbor() {{
+  const hex = rawHex.value.replace(/\\s/g, '');
+  call(`/api/cbor?hex=${{encodeURIComponent(hex)}}`, 'cbor raw');
+}}
+function inspectRaw() {{
+  faultName.textContent = 'Raw CBOR';
+  faultTarget.textContent = 'manual';
+  faultExpected.textContent = 'decode in Android native path when sent';
+  faultHex.textContent = rawHex.value.replace(/\\s/g, '');
+  faultDecoded.textContent = 'Raw hex only. Use app logcat/native CBOR decoder for authoritative fields.';
+}}
+async function copyHex() {{ await navigator.clipboard.writeText(faultHex.textContent); append('copy hex', 'copied selected CBOR hex'); }}
+
+function runPrompt() {{
+  const text = cmd.value.trim();
+  if (!text) return;
+  cmd.value = '';
+  append(`pleos> ${{text}}`, '');
+  const [head, ...rest] = text.split(/\\s+/);
+  const arg = rest.join(' ');
+  if (head === 'open') return openApp(arg || 'drive');
+  if (head === 'speed') {{ ispeed.value = Number(arg || 0); sval.value = ispeed.value; return speed(); }}
+  if (head === 'gear') return drive(arg || 'park');
+  if (head === 'drive') return drive('drive');
+  if (head === 'park') return drive('park');
+  if (head === 'route') return arg === 'stop' ? stopRoute() : startRoute();
+  if (head === 'fault') return fault(arg || selectedFault);
+  if (head === 'cbor') {{ rawHex.value = arg; return sendRawCbor(); }}
+  append('unknown command', 'open|speed|gear|route|fault|cbor');
+}}
+
 async function refresh() {{
   const r = await fetch('/api/status'); const j = await r.json();
   lat.textContent = Number(j.lat).toFixed(5); lon.textContent = Number(j.lon).toFixed(5);
   speed.textContent = Number(j.speedKph).toFixed(0); drive.textContent = j.driveState;
+  route.textContent = j.routeRunning ? 'running' : 'idle';
 }}
+renderFaults();
+append('status', 'controller loaded');
 setInterval(refresh, 1000); refresh();
 </script>
 </body>
@@ -382,6 +583,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(state)
             elif parsed.path == "/api/fault":
                 send_cbor_fault(qs["name"][0])
+                self.send_json(state)
+            elif parsed.path == "/api/cbor":
+                send_cbor_hex(qs["hex"][0])
                 self.send_json(state)
             elif parsed.path == "/api/route/start":
                 route_stop.set()
