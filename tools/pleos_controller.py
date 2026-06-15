@@ -237,25 +237,20 @@ def html():
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Pleos Vehicle Controller</title>
+  <title>PLEOS Test Bench</title>
   <style>
     :root {{
-      --bg:#f4f6f8; --panel:#ffffff; --panel2:#f8fafc; --line:#d9e0e8;
-      --text:#172033; --muted:#667085; --blue:#2563eb; --green:#079455;
-      --amber:#b54708; --red:#d92d20; --ink:#111827; --term:#101828;
+      --bg:#eef2f6; --panel:#ffffff; --soft:#f7f9fc; --line:#d7dee8;
+      --text:#162033; --muted:#667085; --blue:#2358d6; --green:#058849;
+      --amber:#b54708; --red:#d92d20; --ink:#101828; --term:#101828;
     }}
     * {{ box-sizing:border-box; }}
-    body {{
-      margin:0; min-height:100vh; background:var(--bg); color:var(--text);
-      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-    }}
-    main {{ padding:18px; max-width:1680px; margin:0 auto; }}
-    header {{
-      height:56px; display:flex; align-items:center; justify-content:space-between;
-      border-bottom:1px solid var(--line); margin-bottom:14px;
-    }}
-    h1 {{ font-size:18px; margin:0; letter-spacing:0; }}
+    body {{ margin:0; min-height:100vh; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    main {{ padding:14px; max-width:1720px; margin:0 auto; }}
+    header {{ height:64px; display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }}
+    h1 {{ font-size:20px; margin:0; letter-spacing:0; }}
     h2 {{ font-size:12px; margin:0 0 10px; color:var(--muted); text-transform:uppercase; }}
+    h3 {{ font-size:15px; margin:0 0 4px; }}
     label {{ display:block; font-size:11px; font-weight:800; color:var(--muted); margin:10px 0 5px; }}
     input, textarea {{
       width:100%; border:1px solid var(--line); background:white; color:var(--text);
@@ -270,19 +265,12 @@ def html():
     button.primary {{ background:var(--blue); border-color:var(--blue); color:white; }}
     button.green {{ background:var(--green); border-color:var(--green); color:white; }}
     button.red {{ background:var(--red); border-color:var(--red); color:white; }}
-    button.ghost {{ background:var(--panel2); }}
+    button.ghost {{ background:var(--soft); }}
     .status {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
-    .chip {{
-      border:1px solid var(--line); background:var(--panel); border-radius:999px;
-      padding:7px 10px; font-size:12px; font-weight:900; color:var(--muted);
-    }}
+    .chip {{ border:1px solid var(--line); background:var(--panel); border-radius:999px; padding:7px 10px; font-size:12px; font-weight:900; color:var(--muted); }}
     .chip b {{ color:var(--ink); }}
-    .layout {{ display:grid; grid-template-columns:320px minmax(460px,1fr) 420px; gap:12px; min-height:calc(100vh - 90px); }}
-    .panel {{
-      background:var(--panel); border:1px solid var(--line); border-radius:8px;
-      overflow:hidden; box-shadow:0 8px 20px rgba(16,24,40,.05);
-    }}
-    .panel-inner {{ padding:12px; }}
+    .bench {{ display:grid; grid-template-columns:300px minmax(520px,1fr) 410px; grid-template-rows:minmax(510px,1fr) 260px; gap:12px; min-height:calc(100vh - 92px); }}
+    .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; box-shadow:0 8px 20px rgba(16,24,40,.05); }}
     .section {{ border-top:1px solid var(--line); padding:12px; }}
     .section:first-child {{ border-top:0; }}
     .row {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
@@ -290,6 +278,28 @@ def html():
     .speedline {{ display:grid; grid-template-columns:1fr 64px; gap:8px; align-items:center; }}
     input[type=range] {{ padding:0; }}
     .quick button {{ flex:1 1 80px; }}
+    .control {{ grid-column:1; grid-row:1; }}
+    .playbook {{ grid-column:2; grid-row:1; }}
+    .packet {{ grid-column:3; grid-row:1; }}
+    .logpanel {{ grid-column:1 / -1; grid-row:2; }}
+    .hero {{ padding:14px; border-bottom:1px solid var(--line); background:#fbfcfe; }}
+    .mode-strip {{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:12px; }}
+    .mode {{ min-height:58px; border:1px solid var(--line); border-radius:7px; padding:9px; background:white; }}
+    .mode strong {{ display:block; font-size:12px; }}
+    .mode span {{ display:block; margin-top:4px; color:var(--muted); font-size:11px; font-weight:800; }}
+    .mode.ok {{ border-color:#8bd7aa; }}
+    .mode.warn {{ border-color:#fdb022; }}
+    .mode.stop {{ border-color:#f97066; }}
+    .arch {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:12px; }}
+    .node {{ border:1px solid var(--line); border-radius:7px; background:var(--soft); padding:9px; min-height:58px; }}
+    .node b {{ display:block; font-size:12px; }}
+    .node small {{ color:var(--muted); font-weight:800; }}
+    .steps {{ display:grid; gap:10px; padding:12px; }}
+    .step {{ display:grid; grid-template-columns:42px 1fr auto; gap:10px; align-items:center; border:1px solid var(--line); border-radius:8px; background:white; padding:10px; text-align:left; min-height:74px; }}
+    .step:hover {{ border-color:var(--blue); color:var(--text); }}
+    .step-num {{ width:32px; height:32px; border-radius:999px; background:#e8efff; color:var(--blue); display:grid; place-items:center; font-weight:900; }}
+    .step p {{ margin:3px 0 0; color:var(--muted); font-size:12px; font-weight:750; line-height:1.35; }}
+    .step-action {{ color:var(--blue); font-size:12px; font-weight:900; }}
     .terminal {{
       height:100%; display:flex; flex-direction:column; background:var(--term); color:#d0d5dd;
       font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -302,9 +312,9 @@ def html():
     .prompt {{ display:grid; grid-template-columns:56px 1fr 70px; gap:8px; padding:10px; border-top:1px solid #344054; background:#182230; }}
     .prompt input {{ background:#0b1220; border-color:#344054; color:#e4e7ec; }}
     .prompt span {{ align-self:center; color:#47cd89; font-weight:900; }}
-    .fault-list {{ display:grid; gap:8px; }}
+    .fault-list {{ display:grid; gap:8px; max-height:310px; overflow:auto; padding-right:2px; }}
     .fault-card {{
-      width:100%; min-height:58px; text-align:left; border:1px solid var(--line); background:var(--panel2);
+      width:100%; min-height:58px; text-align:left; border:1px solid var(--line); background:var(--soft);
       display:block; padding:8px 10px;
     }}
     .fault-card strong {{ display:block; font-size:12px; color:var(--text); }}
@@ -316,8 +326,9 @@ def html():
     .decoded {{ background:#101828; color:#d0d5dd; border-radius:6px; padding:10px; font:12px ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; }}
     .hint {{ color:var(--muted); font-size:12px; line-height:1.45; margin:8px 0 0; }}
     @media (max-width:1180px) {{
-      .layout {{ grid-template-columns:1fr; }}
-      .terminal {{ min-height:460px; }}
+      .bench {{ display:block; }}
+      .panel {{ margin-bottom:12px; }}
+      .terminal {{ min-height:360px; }}
     }}
   </style>
 </head>
@@ -325,8 +336,8 @@ def html():
 <main>
   <header>
     <div>
-      <h1>PLEOS Control Terminal</h1>
-      <div class="hint">ADB vehicle control, Autoware mode trigger, CBOR fault injection</div>
+      <h1>PLEOS Reconfiguration Test Bench</h1>
+      <div class="hint">Vehicle control, Autoware multimode, CBOR fault injection, MRM validation</div>
     </div>
     <div class="status">
       <div class="chip">lat <b id="lat">{state["lat"]:.5f}</b></div>
@@ -337,10 +348,10 @@ def html():
     </div>
   </header>
 
-  <div class="layout">
-    <aside class="panel">
+  <div class="bench">
+    <aside class="panel control">
       <div class="section">
-        <h2>Applications</h2>
+        <h2>1. Displays</h2>
         <div class="row">
           <button class="primary" onclick="openApp('drive')">Drive Pilot</button>
           <button onclick="openApp('reconfig')">Reconfig</button>
@@ -348,7 +359,7 @@ def html():
         </div>
       </div>
       <div class="section">
-        <h2>Vehicle State</h2>
+        <h2>2. Vehicle State</h2>
         <div class="speedline">
           <input id="ispeed" type="range" min="0" max="130" value="{state["speedKph"]}" oninput="sval.value=this.value">
           <input id="sval" value="{state["speedKph"]}" oninput="ispeed.value=this.value">
@@ -361,7 +372,7 @@ def html():
         </div>
       </div>
       <div class="section">
-        <h2>Location</h2>
+        <h2>3. Location</h2>
         <div class="grid2">
           <div><label>Latitude</label><input id="ilat" value="{state["lat"]:.7f}"></div>
           <div><label>Longitude</label><input id="ilon" value="{state["lon"]:.7f}"></div>
@@ -373,7 +384,7 @@ def html():
         </div>
       </div>
       <div class="section quick">
-        <h2>Route / Quick Commands</h2>
+        <h2>4. Route / Speed Presets</h2>
         <div class="row">
           <button class="green" onclick="startRoute()">Route</button>
           <button class="red" onclick="stopRoute()">Stop</button>
@@ -384,26 +395,67 @@ def html():
       </div>
     </aside>
 
-    <section class="panel terminal">
-      <div class="term-head">
-        <strong>live command log</strong>
-        <div class="row"><button class="ghost" onclick="clearLog()">Clear</button></div>
+    <section class="panel playbook">
+      <div class="hero">
+        <h2>Test Playbook</h2>
+        <h3>Autoware stack reconfiguration flow</h3>
+        <div class="hint">Run a complete validation path instead of isolated buttons. Each step sends the actual ADB/app control command and records evidence below.</div>
+        <div class="mode-strip">
+          <div class="mode ok"><strong>Normal</strong><span>Triple sensor</span></div>
+          <div class="mode warn"><strong>Degraded</strong><span>LiDAR/GNSS/Camera mix</span></div>
+          <div class="mode warn"><strong>Reconfig</strong><span>TSN/Zonal reroute</span></div>
+          <div class="mode stop"><strong>MRM</strong><span>Safe stop</span></div>
+        </div>
+        <div class="arch">
+          <div class="node"><b>Sensor Set</b><small>LiDAR x4, GNSS, Camera</small></div>
+          <div class="node"><b>Network</b><small>TSN-FL / TSN-FR / TSN-R</small></div>
+          <div class="node"><b>Autoware</b><small>Localization, planning, control</small></div>
+          <div class="node"><b>Fault Input</b><small>CBOR native event channel</small></div>
+          <div class="node"><b>Decision</b><small>Mode switch or MRM</small></div>
+          <div class="node"><b>Evidence</b><small>3D warning, log, decoded packet</small></div>
+        </div>
       </div>
-      <div id="out" class="term-log"></div>
-      <div class="prompt">
-        <span>pleos&gt;</span>
-        <input id="cmd" placeholder="try: open reconfig, speed 45, gear drive, fault mrm-stop, cbor A266..." onkeydown="if(event.key==='Enter') runPrompt()">
-        <button class="primary" onclick="runPrompt()">Run</button>
+      <div class="steps">
+        <button class="step" onclick="runScenario('baseline')">
+          <span class="step-num">1</span>
+          <span><strong>Baseline Bring-up</strong><p>Open Reconfig, set park, speed 0, clear active LiDAR/MRM faults.</p></span>
+          <span class="step-action">Run</span>
+        </button>
+        <button class="step" onclick="runScenario('drive')">
+          <span class="step-num">2</span>
+          <span><strong>Drive Validation</strong><p>Switch drive, set 30 km/h, start route to exercise live control state.</p></span>
+          <span class="step-action">Run</span>
+        </button>
+        <button class="step" onclick="runScenario('degrade')">
+          <span class="step-num">3</span>
+          <span><strong>Sensor Degradation</strong><p>Inject front LiDAR degradation and validate Autoware multimode fallback.</p></span>
+          <span class="step-action">Run</span>
+        </button>
+        <button class="step" onclick="runScenario('network')">
+          <span class="step-num">4</span>
+          <span><strong>TSN/Zonal Reconfiguration</strong><p>Inject rear zonal fault and check network reconfiguration evidence.</p></span>
+          <span class="step-action">Run</span>
+        </button>
+        <button class="step" onclick="runScenario('mrm')">
+          <span class="step-num">5</span>
+          <span><strong>MRM Safe Stop</strong><p>Trigger VCU/MRM path, force speed 0 and park after safe-stop command.</p></span>
+          <span class="step-action">Run</span>
+        </button>
+        <button class="step" onclick="runScenario('recover')">
+          <span class="step-num">6</span>
+          <span><strong>Recovery Reset</strong><p>Clear warnings, restore route idle, speed 0, park.</p></span>
+          <span class="step-action">Run</span>
+        </button>
       </div>
     </section>
 
-    <aside class="panel">
+    <aside class="panel packet">
       <div class="section">
-        <h2>CBOR Fault Presets</h2>
+        <h2>CBOR Fault Library</h2>
         <div id="faults" class="fault-list"></div>
       </div>
       <div class="section">
-        <h2>CBOR Inspector</h2>
+        <h2>Packet Inspector</h2>
         <div class="kv">
           <div>Name</div><div id="faultName">-</div>
           <div>Target</div><div id="faultTarget">-</div>
@@ -414,12 +466,12 @@ def html():
         <label>Decoded Fields</label>
         <div id="faultDecoded" class="decoded">{{}}</div>
         <div class="row" style="margin-top:10px">
-          <button class="red" onclick="sendSelectedFault()">Send Selected</button>
+          <button class="red" onclick="sendSelectedFault()">Inject Packet</button>
           <button onclick="copyHex()">Copy Hex</button>
         </div>
       </div>
       <div class="section">
-        <h2>Raw CBOR</h2>
+        <h2>Raw CBOR Override</h2>
         <textarea id="rawHex" placeholder="Paste CBOR hex here"></textarea>
         <div class="row" style="margin-top:8px">
           <button class="primary" onclick="sendRawCbor()">Send Raw</button>
@@ -427,6 +479,19 @@ def html():
         </div>
       </div>
     </aside>
+
+    <section class="panel terminal logpanel">
+      <div class="term-head">
+        <strong>Evidence Log</strong>
+        <div class="row"><button class="ghost" onclick="clearLog()">Clear</button></div>
+      </div>
+      <div id="out" class="term-log"></div>
+      <div class="prompt">
+        <span>pleos&gt;</span>
+        <input id="cmd" placeholder="try: open reconfig, speed 45, gear drive, fault mrm-stop, cbor A266..." onkeydown="if(event.key==='Enter') runPrompt()">
+        <button class="primary" onclick="runPrompt()">Run</button>
+      </div>
+    </section>
   </div>
 </main>
 <script>
@@ -454,7 +519,7 @@ function geo() {{ call(`/api/geo?lat=${{ilat.value}}&lon=${{ilon.value}}`); }}
 function preset(lat, lon) {{ ilat.value=lat; ilon.value=lon; geo(); }}
 function speed() {{ call(`/api/speed?kph=${{ispeed.value}}`); }}
 function quick(v) {{
-  ispeed.value=v; sval.textContent=v;
+  ispeed.value=v; sval.value=v;
   if (Number(v) === 0) {{ stopRoute(); return; }}
   speed();
 }}
@@ -464,6 +529,62 @@ function fault(v) {{ selectFault(v); call(`/api/fault?name=${{v}}`, `fault ${{v}
 function startRoute() {{ call(`/api/route/start?kph=${{ispeed.value || 45}}`, 'route start'); }}
 function stopRoute() {{ call('/api/route/stop', 'route stop'); }}
 function clearLog() {{ lines = ['log cleared']; out.textContent = lines.join('\\n'); }}
+
+async function runScenario(name) {{
+  append(`scenario ${{name}}`, 'starting test sequence');
+  if (name === 'baseline') {{
+    await call('/api/open?app=reconfig', 'open reconfig');
+    await call('/api/drive?state=park', 'gear park');
+    ispeed.value = 0; sval.value = 0;
+    await call('/api/speed?kph=0', 'speed 0');
+    await call('/api/fault?name=clear-lidar', 'clear lidar');
+    await call('/api/fault?name=clear-mrm', 'clear mrm');
+    append('expected state', 'Triple sensor normal / no active fault');
+    return;
+  }}
+  if (name === 'drive') {{
+    await call('/api/open?app=drive', 'open drive pilot');
+    await call('/api/drive?state=drive', 'gear drive');
+    ispeed.value = 30; sval.value = 30;
+    await call('/api/speed?kph=30', 'speed 30');
+    await call('/api/route/start?kph=30', 'route start');
+    append('expected state', 'Drive Pilot movement + Reconfig speed/control evidence');
+    return;
+  }}
+  if (name === 'degrade') {{
+    await call('/api/open?app=reconfig', 'open reconfig');
+    selectFault('front-lidar-degraded');
+    await call('/api/fault?name=front-lidar-degraded', 'inject front lidar degradation');
+    append('expected state', 'Autoware switches to available sensor combination');
+    return;
+  }}
+  if (name === 'network') {{
+    await call('/api/open?app=reconfig', 'open reconfig');
+    selectFault('rear-zc-warning');
+    await call('/api/fault?name=rear-zc-warning', 'inject rear tsn fault');
+    append('expected state', 'TSN/Zonal reconfiguration evidence is visible');
+    return;
+  }}
+  if (name === 'mrm') {{
+    await call('/api/open?app=reconfig', 'open reconfig');
+    selectFault('mrm-stop');
+    await call('/api/fault?name=mrm-stop', 'inject mrm safe stop');
+    ispeed.value = 0; sval.value = 0;
+    await call('/api/speed?kph=0', 'speed 0');
+    await call('/api/drive?state=park', 'gear park');
+    append('expected state', 'MRM safe stop / hazard-safe trajectory');
+    return;
+  }}
+  if (name === 'recover') {{
+    await call('/api/route/stop', 'route stop');
+    await call('/api/fault?name=clear-lidar', 'clear lidar');
+    await call('/api/fault?name=clear-mrm', 'clear mrm');
+    ispeed.value = 0; sval.value = 0;
+    await call('/api/speed?kph=0', 'speed 0');
+    await call('/api/drive?state=park', 'gear park');
+    append('expected state', 'Recovered baseline ready for next test');
+  }}
+}}
 
 function renderFaults() {{
   faults.innerHTML = Object.entries(FAULTS).map(([key, fault]) => `
