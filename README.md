@@ -112,6 +112,34 @@ flutter test
 flutter run -d emulator-5554 --debug --no-resident
 ```
 
+## PLEOS Reconfig Console
+
+보고서형 재구성 아키텍처 데모 앱은 `apps/pleos_reconfig_console`에 별도 Flutter 앱으로 추가되어 있습니다.
+
+- 앱 표시 이름: `PLEOS Reconfig`
+- Android package/activity: `com.example.pleosreconfig/.MainActivity`
+- 목적: 전장부품 결함, Zonal/TSN 재구성, Autoware 멀티모드 전환, MRM, 검증 근거를 한 화면에서 조작
+- 문서: `docs/pleos_reconfig_app_plan.md`
+
+실행:
+
+```bash
+cd apps/pleos_reconfig_console
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+
+flutter pub get
+flutter analyze
+flutter test
+flutter run -d emulator-5554 --debug --no-resident
+```
+
+이미 설치된 앱 실행:
+
+```bash
+adb -s emulator-5554 shell am start -n com.example.pleosreconfig/.MainActivity
+```
+
 ## What This Demo Does
 
 - OSM 기반 네비게이션 화면
