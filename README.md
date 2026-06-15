@@ -4,6 +4,91 @@ Flutter 기반 Pleos Connect IVI 데모 앱입니다. 한 화면 안에서 OSM �
 
 앱 표시 이름은 `Drive Pilot`이고 Android package/activity는 `com.example.mrm_multimodal_demo/.MainActivity`입니다.
 
+## PLEOS Multimode 바로 켜는 순서
+
+이 순서는 macOS에서 Pleos Connect AVD를 켜고, 가운데 창에 `PLEOS Multimode` 앱을 띄우는 기준입니다.
+
+1. 저장소 받기
+
+```bash
+git clone -b pleos-multimode-viewer https://github.com/hwkim3330/ploes.git
+cd ploes
+```
+
+2. ADB와 에뮬레이터 잠금 정리
+
+```bash
+adb kill-server
+adb start-server
+rm -f ~/.android/avd/Pleos_Connect_v2.avd/*.lock ~/.android/avd/Pleos_Connect_v2.avd/multiinstance.lock
+```
+
+3. Pleos 에뮬레이터 켜기
+
+```bash
+~/Library/Android/sdk/emulator/emulator -avd Pleos_Connect_v2 -no-snapshot-load
+```
+
+이 터미널은 에뮬레이터가 켜져 있는 동안 그대로 둡니다. 다른 터미널에서 다음 명령을 실행합니다.
+
+4. 부팅 완료 확인
+
+```bash
+adb wait-for-device
+until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
+adb devices
+```
+
+`emulator-5554    device`가 보이면 준비된 상태입니다.
+
+5. 이미 설치된 `PLEOS Multimode` 앱 실행
+
+```bash
+adb -s emulator-5554 shell am start -n com.example.pleosmrmviewer/.MainActivity
+```
+
+6. 앱이 설치되어 있지 않으면 빌드 후 설치
+
+```bash
+cd apps/pleos_multimode
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --debug
+adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk
+adb -s emulator-5554 shell am start -n com.example.pleosmrmviewer/.MainActivity
+```
+
+7. 화면 위에 Pleos 팝업이나 매니저 창이 덮이면
+
+- 영상 팝업은 왼쪽 위 `X`를 눌러 닫습니다.
+- 앱을 다시 앞으로 보내려면 아래 명령을 다시 실행합니다.
+
+```bash
+adb -s emulator-5554 shell am start -n com.example.pleosmrmviewer/.MainActivity
+```
+
+문제 해결:
+
+```bash
+# 에뮬레이터가 안 보일 때
+adb kill-server
+adb start-server
+adb devices
+
+# Java Runtime 오류가 날 때
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version
+
+# 앱 강제 종료 후 재실행
+adb -s emulator-5554 shell am force-stop com.example.pleosmrmviewer
+adb -s emulator-5554 shell am start -n com.example.pleosmrmviewer/.MainActivity
+```
+
 ## PLEOS Multimode 3D Viewer
 
 Autoware 멀티모드 전환 콘솔은 `apps/pleos_multimode`에 별도 Flutter 앱으로 추가되어 있습니다.
@@ -14,16 +99,17 @@ Autoware 멀티모드 전환 콘솔은 `apps/pleos_multimode`에 별도 Flutter 
 - 모드: Triple sensor, LiDAR+GNSS, LiDAR+Camera, GNSS+Camera, LiDAR only, Camera only, MRM safe stop
 - TSN 스위치 구성: `TSN-FL`, `TSN-FR`, `TSN-R`
 
-실행:
+개발 중 재설치:
 
 ```bash
 cd apps/pleos_multimode
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+
 flutter pub get
 flutter analyze
 flutter test
-flutter build apk --debug
-adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk
-adb -s emulator-5554 shell am start -n com.example.pleosmrmviewer/.MainActivity
+flutter run -d emulator-5554 --debug --no-resident
 ```
 
 ## What This Demo Does
