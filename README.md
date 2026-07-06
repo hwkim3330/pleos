@@ -1,4 +1,5 @@
 # Drive Pilot for Pleos
+<img width="1680" height="979" alt="image" src="https://github.com/user-attachments/assets/15bc23cf-d538-44f1-b7ab-a0e2c88446d5" />
 
 Flutter 기반 Pleos Connect IVI 데모 앱입니다. 한 화면 안에서 OSM 네비게이션, 가상 센서 피드, Pleos/AAOS 차량 속성 읽기, 외부 ADB 컨트롤러 연동을 보여줍니다.
 
