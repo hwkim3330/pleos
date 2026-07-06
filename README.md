@@ -207,6 +207,59 @@ adb -s emulator-5554 shell cmd car_service get-carpropertyconfig
 adb -s emulator-5554 shell cmd car_service get-property-value 0x11600207 0
 ```
 
+에뮬레이터 GPS를 직접 이동할 수도 있습니다. Android emulator는 `lon lat altitude` 순서를 사용합니다.
+
+```bash
+adb -s emulator-5554 emu geo fix 127.1089500 37.4018000 5
+adb -s emulator-5554 emu geo fix 127.1157800 37.4063600 5
+```
+
+Test Bench 데모 루트:
+
+```text
+37.40180, 127.10895
+37.40238, 127.10974
+37.40294, 127.11104
+37.40350, 127.11242
+37.40432, 127.11328
+37.40512, 127.11378
+37.40592, 127.11464
+37.40636, 127.11578
+```
+
+읽기 확인용 car property:
+
+| Name | ID | Notes |
+| --- | --- | --- |
+| `PERF_VEHICLE_SPEED` | `0x11600207` | m/s, read from AAOS if available |
+| `PERF_VEHICLE_SPEED_DISPLAY` | `0x11600208` | m/s, display speed |
+| `PERF_ODOMETER` | `0x11600204` | km |
+| `PERF_STEERING_ANGLE` | `0x11600209` | degrees |
+| `GEAR_SELECTION` | `0x11400400` | selected gear |
+| `CURRENT_GEAR` | `0x11400401` | current gear |
+| `IGNITION_STATE` | `0x11400409` | ignition |
+| `PARKING_BRAKE_ON` | `0x11200402` | boolean |
+| `EV_BATTERY_LEVEL` | `0x11600309` | EV battery |
+| `EV_CHARGE_PORT_CONNECTED` | `0x1120030b` | boolean |
+| `EV_CHARGE_STATE` | `0x11400f41` | charge state |
+| `RANGE_REMAINING` | `0x11600308` | range |
+| `FUEL_LEVEL` | `0x11600307` | fuel |
+| `TIRE_PRESSURE` | `0x17600309` | tire pressure |
+| `ENV_OUTSIDE_TEMPERATURE` | `0x11600703` | outside temp |
+| `TURN_SIGNAL_STATE` | `0x11400408` | turn signal |
+| `HEADLIGHTS_STATE` | `0x11400e00` | headlights |
+| `HAZARD_LIGHTS_STATE` | `0x11400e03` | hazards |
+| `ABS_ACTIVE` | `0x1120040a` | ABS |
+| `TRACTION_CONTROL_ACTIVE` | `0x1120040b` | traction control |
+| `CRUISE_CONTROL_STATE` | `0x11401011` | cruise |
+| `CRUISE_CONTROL_TARGET_SPEED` | `0x11601013` | cruise target |
+| `ADAPTIVE_CRUISE_CONTROL_LEAD_VEHICLE_MEASURED_DISTANCE` | `0x11401015` | lead distance |
+| `LANE_KEEP_ASSIST_STATE` | `0x11401009` | lane keep |
+| `LANE_CENTERING_ASSIST_STATE` | `0x1140100c` | lane centering |
+| `FORWARD_COLLISION_WARNING_STATE` | `0x11401003` | FCW |
+| `AUTOMATIC_EMERGENCY_BRAKING_STATE` | `0x11401001` | AEB |
+| `HANDS_ON_DETECTION_DRIVER_STATE` | `0x11401017` | hands-on detection |
+
 루트 앱은 Android `MethodChannel('mrm.pilot/pleos')`를 통해 다음 bridge를 제공합니다.
 
 | Method | Purpose |
@@ -217,6 +270,207 @@ adb -s emulator-5554 shell cmd car_service get-property-value 0x11600207 0
 | `requestRoute` | demo route request stub |
 | `speakStatus` | demo TTS stub |
 | `startVoiceCommand` | demo STT stub |
+
+Android receiver:
+
+```xml
+<receiver
+    android:name=".DrivePilotControlReceiver"
+    android:exported="true" />
+```
+
+## PLEOS 권한과 SDK/API Map
+
+루트 앱 manifest는 PLEOS 권한을 선언하고, 앱 화면에서 capability 상태를 표시합니다. 실제 SDK 호출은 Playground/App Market Console 승인 상태와 공식 SDK artifact 연결이 필요합니다.
+
+선언 권한:
+
+```xml
+<uses-permission android:name="pleos.car.permission.CAR_ENERGY" />
+<uses-permission android:name="pleos.car.permission.CAR_INFO" />
+<uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
+<uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" />
+<uses-permission android:name="pleos.car.permission.NAVI_CUSTOM_MAP" />
+<uses-permission android:name="pleos.car.permission.NAVI_CUSTOM_ROUTE" />
+<uses-permission android:name="pleos.car.permission.NAVI_CUSTOM_ETC" />
+<uses-permission android:name="pleos.car.permission.FUSED_LOCATION" />
+<uses-permission android:name="pleos.car.permission.TTS_SERVICE" />
+<uses-permission android:name="pleos.car.permission.STT_SERVICE" />
+<uses-permission android:name="pleos.car.permission.LLM_SERVICE" />
+```
+
+SDK/API 대응:
+
+| SDK/API | What it is for | Current demo status |
+| --- | --- | --- |
+| Vehicle SDK | vehicle status query and control | AAOS read bridge implemented; direct `set` avoided |
+| NaviHelper SDK | built-in PLEOS navigation and route information | permission declared; demo uses OSM route surface |
+| Gleo AI SDK | STT, TTS, LLM features | permissions declared; demo stubs exist |
+| ADAS SDK | driving-assist data such as objects, lanes, parking spaces | displayed as unavailable/demo |
+| Fused Location SDK | vehicle location information | permission declared; emulator GPS/app override used |
+| Fleet API | REST/Webhook fleet management API | documented as external cloud API |
+| Vehicle Data API | connected car data API | documented as external cloud API |
+
+Vehicle SDK domains referenced by PLEOS docs:
+
+```text
+Brake
+CarInfo
+Display
+Door
+DrivingMode
+EvBattery
+HVAC
+Light
+Odometer
+Safety
+Seat
+SideMirror
+Steeringwheel
+Tire
+TurnSignal
+Window
+Wiper
+```
+
+Vehicle SDK wiring target:
+
+```kotlin
+// Pseudocode. Wire the official SDK artifact before using this.
+val vehicle = Vehicle(context)
+vehicle.initialize()
+
+val carInfo = vehicle.getCarInfo()
+val capability = carInfo.checkCarInfoCapability()
+
+vehicle.release()
+```
+
+NaviHelper APIs referenced by PLEOS docs:
+
+```text
+initialize
+release
+addListener
+removeListener
+requestRoute
+cancelRoute
+requestReRoute
+addWaypoint
+removeWaypoint
+changeRouteOption
+getBookmarkInfo
+getRecentDestinationInfo
+getRouteStateInfo
+getCurrentLocationInfo
+getDestinationInfo
+getWaypointInfo
+getTBTInfo
+getChargerOperatorInfo
+```
+
+NaviHelper wiring target:
+
+```kotlin
+// Pseudocode. Replace the OSM-only route request with official NaviHelper when approved.
+val naviHelper = NaviHelper(context)
+naviHelper.initialize()
+naviHelper.addListener(listener)
+naviHelper.requestRoute(routeInfo)
+naviHelper.getCurrentLocationInfo()
+naviHelper.getTBTInfo()
+naviHelper.release()
+```
+
+Gleo AI SDK groups:
+
+```text
+SpeechToText SDK
+TextToSpeech SDK
+LLM SDK
+```
+
+LLM APIs referenced by PLEOS docs:
+
+```text
+initialize
+release
+generateContent
+startChat
+sendMessage
+setModelParameter
+registerApp
+getOnDeviceModelPromptsContents
+```
+
+Fused Location APIs:
+
+```text
+initialize
+release
+registerFusedLocationCallback
+unregisterFusedLocationCallback
+```
+
+Compatibility notes:
+
+- SDK/API support can vary by vehicle model.
+- Use each SDK interface's capability check API before relying on a feature.
+- NaviHelper and Gleo AI are documented as fully compatible.
+- Vehicle SDK may vary by model.
+- Third-party app developers can read supported AAOS vehicle properties but cannot write them with system authority.
+- Direct `set*` SDK API calls can fail review if they bypass approved flows.
+
+## Fleet API Skeleton
+
+Do not commit real secrets. Use environment variables:
+
+```bash
+export FLEET_API_GATEWAY_HOST="https://<gateway-host>"
+export FLEET_API_HOST="https://<fleet-api-host>"
+export PLEOS_PROJECT_ID="<project-id>"
+export PLEOS_CLIENT_ID="<client-id>"
+export PLEOS_CLIENT_SECRET="<client-secret>"
+```
+
+Request a token:
+
+```bash
+curl -X POST "$FLEET_API_GATEWAY_HOST/auth/client/token" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"client_id\": \"$PLEOS_CLIENT_ID\",
+    \"secret\": \"$PLEOS_CLIENT_SECRET\",
+    \"identifier\": \"$PLEOS_PROJECT_ID\",
+    \"regenerate_token\": false
+  }"
+```
+
+Call Fleet API with the issued token:
+
+```bash
+export PLEOS_ACCESS_TOKEN="<access-token>"
+
+curl -X GET "$FLEET_API_HOST/developers/api/vehicles?page=1&size=20" \
+  -H "x-42dot-client-id: Bearer $PLEOS_ACCESS_TOKEN"
+```
+
+## CRN / Devbox Setup
+
+Do not commit the real CRN. Store it locally:
+
+```bash
+echo "<your-crn>" > ~/.pleos-connect-crn
+```
+
+Inject CRN into Devbox/emulator when required by PLEOS setup:
+
+```bash
+CRN="$(cat ~/.pleos-connect-crn)"
+adb -s emulator-5554 root
+adb -s emulator-5554 shell su 0 "echo 'propId: 554696961 areaId: 0 values: $CRN' > /data/vendor/vsomeip/vhal_fifo"
+adb -s emulator-5554 reboot
+```
 
 ## 문서
 
