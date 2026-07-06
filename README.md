@@ -7,8 +7,8 @@ PLEOS Connect / Android Automotive OS 데모 워크스페이스입니다. 기본
 이 저장소의 현재 작업 브랜치:
 
 ```bash
-git clone -b pleos-multimode-viewer https://github.com/hwkim3330/ploes.git
-cd ploes
+git clone -b pleos-multimode-viewer https://github.com/hwkim3330/pleos.git
+cd pleos
 ```
 
 ## 구성
