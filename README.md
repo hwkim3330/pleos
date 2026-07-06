@@ -20,6 +20,72 @@ cd ploes
 | PLEOS Reconfig | `apps/pleos_reconfig_console` | `com.example.pleosreconfig/.MainActivity` | TSN/Zonal 재구성, 고장 시나리오, CBOR fault injection 검증 |
 | PLEOS Test Bench | `tools/pleos_controller.py` | local web `127.0.0.1:8765` | Mac에서 ADB로 앱 실행, 속도/기어/GPS/CBOR/MRM 시나리오 조작 |
 
+## 버전 정보
+
+이 표는 2026-07-06 현재 `PLEOS Multimode`와 `PLEOS Reconfig` 기준으로 확인한 개발/실행 버전입니다. 두 앱 모두 Dart SDK constraint는 `^3.9.2`이고, `pubspec.lock`이 포함되어 있으므로 재현이 필요하면 `flutter pub upgrade`보다 `flutter pub get`을 먼저 사용합니다.
+
+### 개발 환경
+
+| 항목 | 현재 확인값 / 권장값 | 확인 위치 / 명령 | 비고 |
+| --- | --- | --- | --- |
+| macOS | `macOS 26.5 25F71 darwin-arm64` | `flutter doctor -v` | 현재 작업 Mac 기준 |
+| Flutter | `3.41.6 stable` | `flutter --version` | 설치 경로: `/opt/homebrew/share/flutter` |
+| Dart | `3.11.4` | `dart --version` | Multimode/Reconfig constraint: `^3.9.2`, lock: `>=3.9.2 <4.0.0` |
+| Flutter DevTools | `2.54.2` | `flutter --version` | Flutter SDK에 포함 |
+| Java / JDK | OpenJDK `17` 권장 | `java -version` | 기본 `/usr/bin/java`는 버전 확인 실패 가능. 아래 `JAVA_HOME` export 사용 |
+| Android SDK | SDK `35.0.0`, platform `android-36` 설치 | `flutter doctor -v` | SDK 경로: `/Users/parksik/Library/Android/sdk` |
+| Android Emulator | `36.6.11.0` | `flutter doctor -v` | PLEOS AVD 실행에 사용 |
+| PLEOS AVD | `Pleos_Connect_v2` | `~/Library/Android/sdk/emulator/emulator -list-avds` | 실행 예시는 아래 빠른 실행 참고 |
+| 테스트 에뮬레이터 | Android 14 API 34, `emulator-5554` | `adb devices`, `flutter doctor -v` | `Car on arm64 emulator`로 인식 |
+| Gradle wrapper | `8.12` | `apps/*/android/gradle/wrapper/gradle-wrapper.properties` | Multimode/Reconfig 동일 |
+| Android Gradle Plugin | `8.9.1` | `apps/*/android/settings.gradle.kts` | Multimode/Reconfig 동일 |
+| Kotlin Android plugin | `2.1.0` | `apps/*/android/settings.gradle.kts` | Android bridge/receiver에 사용 |
+| Chrome | `149.0.7827.201` | `flutter doctor -v` | Flutter Web / local Test Bench 확인용 |
+| npm / Node | 사용 안 함 | `package.json` 없음 | Test Bench는 Python 표준 라이브러리 기반 |
+
+### Multimode / Reconfig SDK 설정
+
+| App | Path | Dart SDK constraint | Flutter SDK constraint from lock | Android namespace | applicationId | App version |
+| --- | --- | --- | --- | --- | --- | --- |
+| PLEOS Multimode | `apps/pleos_multimode` | `^3.9.2` | `>=3.35.0` | `com.example.pleosmrmviewer` | `com.example.pleosmrmviewer` | `1.0.0+1` |
+| PLEOS Reconfig | `apps/pleos_reconfig_console` | `^3.9.2` | `>=3.35.0` | `com.example.pleosreconfig` | `com.example.pleosreconfig` | `1.0.0+1` |
+
+### Multimode / Reconfig 주요 라이브러리
+
+| 라이브러리 | 선언 버전 | lock 버전 | 사용 앱 | 용도 |
+| --- | --- | --- | --- | --- |
+| `cupertino_icons` | `^1.0.8` | `1.0.8` | Multimode, Reconfig | 기본 아이콘 |
+| `model_viewer_plus` | `^1.9.3` | `1.9.3` | Multimode, Reconfig | `roii.glb` 3D 차량 모델 표시 |
+| `webview_flutter` | `^4.13.0` | `4.13.0` | Multimode, Reconfig | Android WebView 기반 3D/model-viewer 표시 |
+| `webview_flutter_android` | transitive | `4.10.2` | Multimode, Reconfig | Android WebView 구현체 |
+| `webview_flutter_platform_interface` | transitive | `2.14.0` | Multimode, Reconfig | WebView platform interface |
+| `webview_flutter_wkwebview` | transitive | `3.23.1` | Multimode, Reconfig | iOS/macOS WebView 구현체 |
+| `animations` | `^2.1.0` | `2.1.0` | Multimode, Reconfig | 패널/상태 전환 애니메이션 |
+| `flutter_riverpod` | `^2.5.1` | `2.6.1` | Multimode, Reconfig | 상태 관리 |
+| `freezed_annotation` | `^2.4.1` | `2.4.4` | Multimode, Reconfig | immutable state model annotation |
+| `json_annotation` | `^4.8.1` | `4.9.0` | Multimode, Reconfig | JSON model annotation |
+| `fl_chart` | `^1.2.0` | `1.2.0` | Multimode, Reconfig | 점수/상태 차트 |
+
+### Multimode / Reconfig 개발 의존성
+
+| 라이브러리 | 선언 버전 | lock 버전 | 사용 앱 | 용도 |
+| --- | --- | --- | --- | --- |
+| `flutter_lints` | `^5.0.0` | `5.0.0` | Multimode, Reconfig | 정적 분석 규칙 |
+| `freezed` | `^2.4.7` | `2.5.8` | Multimode, Reconfig | state/model code generation |
+| `build_runner` | `^2.4.8` | `2.5.4` | Multimode, Reconfig | code generation runner |
+| `json_serializable` | `^6.7.1` | `6.9.5` | Multimode, Reconfig | JSON serializer generation |
+
+### 네이티브 / 외부 연동
+
+| 항목 | 버전 / 식별자 | 위치 | 용도 |
+| --- | --- | --- | --- |
+| `roii.glb` | repo asset | `apps/pleos_multimode/lib/assets/roii.glb`, `apps/pleos_reconfig_console/lib/assets/roii.glb` | 3D 차량 모델 |
+| CBOR broadcast action | `com.pleos.SIMULATE_CBOR` | `CborFaultService.kt` | 센서/TSN/Zonal/MRM fault payload 주입 |
+| Drive Pilot control action | `com.example.mrm_multimodal_demo.CONTROL` | `DrivePilotControlReceiver` | 속도/GPS/주행 상태 override |
+| PLEOS Maven repository | `https://nexus-playground.pleos.ai/repository/maven-releases/` | Multimode/Reconfig `settings.gradle.kts` | PLEOS SDK 연동 대비 repository |
+| Flutter storage Maven | `https://storage.googleapis.com/download.flutter.io` | Multimode/Reconfig `settings.gradle.kts` | Flutter Android artifacts |
+| Test Bench server | Python 3 standard library | `tools/pleos_controller.py` | `127.0.0.1:8765` 로컬 제어 UI |
+
 ## 주요 기능
 
 - PLEOS / AAOS 차량 속성 읽기와 앱 내부 주행 상태 override
