@@ -499,30 +499,27 @@ class _ModeCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            Row(
+            Column(
               children: [
-                Expanded(
-                  child: _PathPair(
-                    switchLabel: 'TSN-F A',
-                    espLabel: 'ESP-A',
-                    armed: hardware.ioNodeConnected,
-                  ),
+                _PathPair(
+                  fromLabel: 'F-A',
+                  espLabel: 'ESP-AB',
+                  toLabel: 'F-B',
+                  armed: hardware.ioNodeConnected,
                 ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: _PathPair(
-                    switchLabel: 'TSN-F B',
-                    espLabel: 'ESP-B',
-                    armed: hardware.ioNodeConnected,
-                  ),
+                const SizedBox(height: 4),
+                _PathPair(
+                  fromLabel: 'F-A',
+                  espLabel: 'ESP-AR',
+                  toLabel: 'R',
+                  armed: hardware.ioNodeConnected,
                 ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: _PathPair(
-                    switchLabel: 'TSN-R',
-                    espLabel: 'ESP-R',
-                    armed: hardware.ioNodeConnected,
-                  ),
+                const SizedBox(height: 4),
+                _PathPair(
+                  fromLabel: 'F-B',
+                  espLabel: 'ESP-BR',
+                  toLabel: 'R',
+                  armed: hardware.ioNodeConnected,
                 ),
               ],
             ),
@@ -604,26 +601,26 @@ class _PathNode extends StatelessWidget {
 
 class _PathPair extends StatelessWidget {
   const _PathPair({
-    required this.switchLabel,
+    required this.fromLabel,
     required this.espLabel,
+    required this.toLabel,
     required this.armed,
   });
 
-  final String switchLabel;
+  final String fromLabel;
   final String espLabel;
+  final String toLabel;
   final bool armed;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
-        _PathNode(label: switchLabel, active: true),
-        const Padding(
-          padding: EdgeInsets.only(left: 13),
-          child: Icon(Icons.arrow_downward_rounded, size: 13),
-        ),
+        _PathNode(label: fromLabel, active: true),
+        const Expanded(child: Divider(height: 1)),
         _PathNode(label: espLabel, active: armed, warning: !armed),
+        const Expanded(child: Divider(height: 1)),
+        _PathNode(label: toLabel, active: true),
       ],
     );
   }

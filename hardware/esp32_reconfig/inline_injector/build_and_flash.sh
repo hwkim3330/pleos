@@ -2,15 +2,15 @@
 set -eu
 
 SKETCH_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PORT=${1:?usage: $0 /dev/tty.usbmodemXXXX A|B|R}
-ROLE=${2:?usage: $0 /dev/tty.usbmodemXXXX A|B|R}
+PORT=${1:?usage: $0 /dev/tty.usbmodemXXXX AR|BR|AB}
+ROLE=${2:?usage: $0 /dev/tty.usbmodemXXXX AR|BR|AB}
 FQBN='esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi'
 
 case "$ROLE" in
-  A) INDEX=0 ;;
-  B) INDEX=1 ;;
-  R) INDEX=2 ;;
-  *) echo "role must be A, B or R" >&2; exit 2 ;;
+  AR) INDEX=0 ;;
+  BR) INDEX=1 ;;
+  AB) INDEX=2 ;;
+  *) echo "role must be AR, BR or AB" >&2; exit 2 ;;
 esac
 
 arduino-cli core install esp32:esp32@3.3.0

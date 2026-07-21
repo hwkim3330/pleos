@@ -11,7 +11,7 @@ constexpr uint32_t kHeartbeatMs = 1000;
 #endif
 static_assert(PLEOS_LINK_INDEX >= 0 && PLEOS_LINK_INDEX <= 2, "PLEOS_LINK_INDEX must be 0, 1 or 2");
 constexpr const char *kLinkIds[] = {"tsn_front_a", "tsn_front_b", "tsn_rear"};
-constexpr const char *kNodeIds[] = {"PLEOS_INLINE_A", "PLEOS_INLINE_B", "PLEOS_INLINE_R"};
+constexpr const char *kNodeIds[] = {"PLEOS_INLINE_AR", "PLEOS_INLINE_BR", "PLEOS_INLINE_AB"};
 
 struct Link {
   const char *id;

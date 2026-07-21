@@ -94,10 +94,12 @@ const String modelViewerScript = '''
         };
 
         const inlineConnections = [
-            ['frontSwitchA', 'frontSwitchB', '#155eef', 5],
-            ['frontSwitchA', 'inlineEspA', '#0f766e', 4],
-            ['frontSwitchB', 'inlineEspB', '#0f766e', 4],
-            ['rearSwitch', 'inlineEspR', '#0f766e', 4],
+            ['frontSwitchA', 'inlineEspAB', '#155eef', 5],
+            ['inlineEspAB', 'frontSwitchB', '#155eef', 5],
+            ['frontSwitchA', 'inlineEspAR', '#0f766e', 4],
+            ['inlineEspAR', 'rearSwitch', '#0f766e', 4],
+            ['frontSwitchB', 'inlineEspBR', '#0f766e', 4],
+            ['inlineEspBR', 'rearSwitch', '#0f766e', 4],
         ];
 
         const createInlineLinkLayer = () => {
