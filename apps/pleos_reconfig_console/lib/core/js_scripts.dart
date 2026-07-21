@@ -145,6 +145,10 @@ const String modelViewerScript = '''
             return '#' + toHex(r) + toHex(g) + toHex(b);
         };
 
+        // Keep an immutable baseline. Alert frames must never become the new
+        // "original" color when repeated hardware heartbeats arrive.
+        const materialBaselines = new Map();
+
         const findMaterialsByName = (model, names) => {
             const entries = [];
             names.forEach((name) => {
@@ -155,7 +159,13 @@ const String modelViewerScript = '''
                 }
 
                 const pbr = material.pbrMetallicRoughness;
-                const base = pbr && Array.isArray(pbr.baseColorFactor) ? [...pbr.baseColorFactor] : [1, 1, 1, 1];
+                const currentBase = pbr?.baseColorFactor
+                    ? Array.from(pbr.baseColorFactor)
+                    : [1, 1, 1, 1];
+                if (!materialBaselines.has(material)) {
+                    materialBaselines.set(material, currentBase);
+                }
+                const base = [...materialBaselines.get(material)];
                 const originalAlpha = typeof base[3] === 'number' ? CLAMP(base[3], 0, 1) : 1;
                 const baseHex = rgbToHex(base[0], base[1], base[2]);
 
@@ -211,7 +221,7 @@ const String modelViewerScript = '''
                 // BaseColor 복원
                 try {
                     if (entry.pbr?.setBaseColorFactor) {
-                        entry.pbr.setBaseColorFactor(entry.baseHex);
+                        entry.pbr.setBaseColorFactor([...entry.base]);
                     }
                 } catch (e) {}
             });

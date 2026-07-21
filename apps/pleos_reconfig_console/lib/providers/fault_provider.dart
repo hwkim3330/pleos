@@ -19,6 +19,7 @@ class FaultNotifier extends StateNotifier<Map<int, FaultData>> {
 
   final Ref ref;
   final FaultStreamService _faultStreamService = FaultStreamService();
+  Map<String, String> _lastHardwareChannels = const {};
 
   void _initializeFaultStream() {
     _faultStreamService.startListening((event) {
@@ -60,6 +61,13 @@ class FaultNotifier extends StateNotifier<Map<int, FaultData>> {
 
   void _applyHardwareState(HardwareReconfigState hardware) {
     if (!hardware.connected) return;
+    final unchanged =
+        _lastHardwareChannels.length == hardware.channels.length &&
+        hardware.channels.entries.every(
+          (entry) => _lastHardwareChannels[entry.key] == entry.value,
+        );
+    if (unchanged) return;
+    _lastHardwareChannels = Map.unmodifiable(hardware.channels);
     clearAll(notifyHardware: false);
     var id = 500;
     for (final entry in hardware.channels.entries) {
