@@ -2,7 +2,7 @@
 
 ROII 3D vehicle architecture, Autoware sensor multimode and ESP32 inline fault-injection hardware are integrated in one PLEOS app.
 
-`tools/build_reconfig_model.py` generates `roii_reconfig.glb` from the original ROII asset. The blue/teal switch links and ESP-AB/AR/BR enclosures are real model meshes, not screen overlays.
+`tools/build_reconfig_model.py` generates `roii_reconfig.glb` from the original ROII asset. It preserves the native split FrontZC, Path1/Path2 and connection meshes, and adds only the ESP-AB/AR/BR enclosures.
 
 ```bash
 python3 tools/build_reconfig_model.py \

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Add inline ESP nodes and physical 3D link meshes to the ROII glTF."""
+"""Add inline ESP nodes to the ROII glTF without replacing its native paths."""
 
 import argparse
 import base64
 import json
-import math
 import struct
 from pathlib import Path
 
@@ -27,16 +26,6 @@ CUBE_INDICES = [value for face in range(6) for value in (
     face * 4, face * 4 + 1, face * 4 + 2,
     face * 4, face * 4 + 2, face * 4 + 3,
 )]
-
-
-def quaternion_from_z(direction):
-    length = math.sqrt(sum(value * value for value in direction))
-    x, y, z = (value / length for value in direction)
-    if z < -0.999999:
-        return [1.0, 0.0, 0.0, 0.0]
-    qx, qy, qz, qw = -y, x, 0.0, 1.0 + z
-    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
-    return [qx / norm, qy / norm, qz / norm, qw / norm]
 
 
 def add_material(document, name, color, metallic=0.15):
@@ -107,16 +96,6 @@ def add_node(document, name, mesh, position, scale, rotation=None):
     document["scenes"][document.get("scene", 0)].setdefault("nodes", []).append(index)
 
 
-def add_link(document, mesh, name, start, end, thickness=0.34):
-    direction = tuple(end[i] - start[i] for i in range(3))
-    length = math.sqrt(sum(value * value for value in direction))
-    midpoint = tuple((start[i] + end[i]) / 2 for i in range(3))
-    add_node(
-        document, name, mesh, midpoint, (thickness, thickness, length),
-        quaternion_from_z(direction),
-    )
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
@@ -128,28 +107,13 @@ def main():
     binary = bytearray(base64.b64decode(encoded))
     geometry = append_geometry(document, binary)
 
-    blue = add_material(document, "ReconfigLinkAB", (0.08, 0.35, 0.92))
-    teal = add_material(document, "ReconfigLinkZonal", (0.02, 0.58, 0.48))
     esp = add_material(document, "InlineESP", (0.04, 0.32, 0.29), metallic=0.35)
-    blue_mesh = add_mesh(document, "ReconfigLinkABMesh", blue, geometry)
-    teal_mesh = add_mesh(document, "ReconfigLinkZonalMesh", teal, geometry)
     esp_mesh = add_mesh(document, "InlineESPMesh", esp, geometry)
 
-    # The source FrontZC is already split into left/right yellow primitives.
-    # These anchors sit on the original switch housings instead of covering them.
-    front_a = (-2.45, 5.35, 14.0)
-    front_b = (2.45, 5.35, 14.0)
-    rear = (0.0, 5.35, -4.0)
+    # Preserve the source model's split FrontZC, Path1/Path2 and connection meshes.
     esp_ab = (0.0, 5.6, 14.0)
     esp_ar = (-1.25, 5.6, 5.0)
     esp_br = (1.25, 5.6, 5.0)
-    for mesh, name, start, middle, end in (
-        (blue_mesh, "Link_FrontA_ESPAB", front_a, esp_ab, front_b),
-        (teal_mesh, "Link_FrontA_ESPAR", front_a, esp_ar, rear),
-        (teal_mesh, "Link_FrontB_ESPBR", front_b, esp_br, rear),
-    ):
-        add_link(document, mesh, name + "_In", start, middle)
-        add_link(document, mesh, name + "_Out", middle, end)
     for name, position in (("ESP_AB", esp_ab), ("ESP_AR", esp_ar), ("ESP_BR", esp_br)):
         add_node(document, name, esp_mesh, position, (1.1, 0.5, 1.1))
 
