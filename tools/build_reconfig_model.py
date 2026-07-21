@@ -131,20 +131,18 @@ def main():
     blue = add_material(document, "ReconfigLinkAB", (0.08, 0.35, 0.92))
     teal = add_material(document, "ReconfigLinkZonal", (0.02, 0.58, 0.48))
     esp = add_material(document, "InlineESP", (0.04, 0.32, 0.29), metallic=0.35)
-    front_a_material = add_material(document, "FrontSwitchA", (0.98, 0.58, 0.04), metallic=0.25)
-    front_b_material = add_material(document, "FrontSwitchB", (0.96, 0.78, 0.08), metallic=0.25)
     blue_mesh = add_mesh(document, "ReconfigLinkABMesh", blue, geometry)
     teal_mesh = add_mesh(document, "ReconfigLinkZonalMesh", teal, geometry)
     esp_mesh = add_mesh(document, "InlineESPMesh", esp, geometry)
-    front_a_mesh = add_mesh(document, "FrontSwitchAMesh", front_a_material, geometry)
-    front_b_mesh = add_mesh(document, "FrontSwitchBMesh", front_b_material, geometry)
 
-    front_a = (-7.2, 8.4, 13.0)
-    front_b = (7.2, 8.4, 13.0)
-    rear = (0.0, 7.0, -12.0)
-    esp_ab = (0.0, 8.8, 13.0)
-    esp_ar = (-5.0, 7.2, 0.5)
-    esp_br = (5.0, 7.2, 0.5)
+    # The source FrontZC is already split into left/right yellow primitives.
+    # These anchors sit on the original switch housings instead of covering them.
+    front_a = (-2.45, 5.35, 14.0)
+    front_b = (2.45, 5.35, 14.0)
+    rear = (0.0, 5.35, -4.0)
+    esp_ab = (0.0, 5.6, 14.0)
+    esp_ar = (-1.25, 5.6, 5.0)
+    esp_br = (1.25, 5.6, 5.0)
     for mesh, name, start, middle, end in (
         (blue_mesh, "Link_FrontA_ESPAB", front_a, esp_ab, front_b),
         (teal_mesh, "Link_FrontA_ESPAR", front_a, esp_ar, rear),
@@ -153,11 +151,7 @@ def main():
         add_link(document, mesh, name + "_In", start, middle)
         add_link(document, mesh, name + "_Out", middle, end)
     for name, position in (("ESP_AB", esp_ab), ("ESP_AR", esp_ar), ("ESP_BR", esp_br)):
-        add_node(document, name, esp_mesh, position, (1.5, 0.9, 1.8))
-
-    # Two independent front switch enclosures with a 4.4 m center gap.
-    add_node(document, "FrontSwitch_A", front_a_mesh, front_a, (5.0, 0.85, 3.4))
-    add_node(document, "FrontSwitch_B", front_b_mesh, front_b, (5.0, 0.85, 3.4))
+        add_node(document, name, esp_mesh, position, (1.1, 0.5, 1.1))
 
     document["buffers"][0]["byteLength"] = len(binary)
     document["buffers"][0]["uri"] = prefix + "," + base64.b64encode(binary).decode("ascii")
