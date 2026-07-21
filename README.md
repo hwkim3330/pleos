@@ -18,6 +18,7 @@ cd pleos
 | Drive Pilot | repo root | `com.example.mrm_multimodal_demo/.MainActivity` | PLEOS IVI 데모, 지도/주행/차량 상태 표시 |
 | PLEOS Multimode | `apps/pleos_multimode` | `com.example.pleosmrmviewer/.MainActivity` | 3D 차량 기반 Autoware 센서 조합 전환, MRM 시각화 |
 | PLEOS Reconfig | `apps/pleos_reconfig_console` | `com.example.pleosreconfig/.MainActivity` | TSN/Zonal 재구성, 고장 시나리오, CBOR fault injection 검증 |
+| PLEOS Reconfig Studio | `apps/pleos_reconfig_studio` | `com.hwkim3330.pleosreconfigstudio/.MainActivity` | ROII 기반 Inline ESP/TSN 경로 재구성 및 Autoware 멀티모드 검증 |
 | PLEOS Test Bench | `tools/pleos_controller.py` | local web `127.0.0.1:8765` | Mac에서 ADB로 앱 실행, 속도/기어/GPS/CBOR/MRM 시나리오 조작 |
 
 ## 버전 정보
@@ -96,6 +97,7 @@ cd pleos
 - 센서 고장, TSN/FRER/Zonal 고장, 복합 환경 저하, MRM safe stop 시나리오
 - ADB broadcast 기반 CBOR fault payload 주입과 Flutter EventChannel 처리
 - 7인치 ESP 중앙 컨트롤러 및 USB 스위치 I/O 노드 실시간 연동
+- `hardware/esp32_reconfig`의 Supervisor, Inline Injector, I/O Node 펌웨어와 fail-safe 배선 계약
 
 ## 빠른 실행
 
@@ -150,6 +152,9 @@ adb -s emulator-5554 shell am start -n com.example.pleosmrmviewer/.MainActivity
 
 # PLEOS Reconfig
 adb -s emulator-5554 shell am start -n com.example.pleosreconfig/.MainActivity
+
+# PLEOS Reconfig Studio
+adb -s emulator-5554 shell am start -n com.hwkim3330.pleosreconfigstudio/.MainActivity
 ```
 
 ## 빌드와 테스트
