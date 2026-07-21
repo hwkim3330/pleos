@@ -69,7 +69,7 @@ flutter:
   uses-material-design: true
 
   assets:
-    - lib/assets/roii.glb
+    - lib/assets/roii_reconfig.glb
 
   # To add assets to your application, add an assets section, like this:
   # assets:

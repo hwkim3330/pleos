@@ -46,15 +46,6 @@ const String modelViewerScript = '''
                 background: rgba(240,253,250,0.97);
                 box-shadow: 0 5px 14px rgba(15,118,110,0.2);
             }
-            .inline-link-layer {
-                position: absolute;
-                inset: 0;
-                width: 100%;
-                height: 100%;
-                pointer-events: none;
-                z-index: 1;
-                overflow: visible;
-            }
         \`;
         document.head.appendChild(style);
 
@@ -89,43 +80,6 @@ const String modelViewerScript = '''
             viewer.querySelectorAll('.label-hotspot').forEach((hotspot) => {
                 hotspot.addEventListener('click', () => annotationClicked(hotspot));
             });
-            createInlineLinkLayer();
-            requestAnimationFrame(renderInlineLinks);
-        };
-
-        const inlineConnections = [
-            ['frontSwitchA', 'inlineEspAB', '#155eef', 5],
-            ['inlineEspAB', 'frontSwitchB', '#155eef', 5],
-            ['frontSwitchA', 'inlineEspAR', '#0f766e', 4],
-            ['inlineEspAR', 'rearSwitch', '#0f766e', 4],
-            ['frontSwitchB', 'inlineEspBR', '#0f766e', 4],
-            ['inlineEspBR', 'rearSwitch', '#0f766e', 4],
-        ];
-
-        const createInlineLinkLayer = () => {
-            viewer.querySelector('.inline-link-layer')?.remove();
-            viewer.insertAdjacentHTML('afterbegin',
-                '<svg class="inline-link-layer" aria-hidden="true"></svg>');
-        };
-
-        const renderInlineLinks = () => {
-            const svg = viewer.querySelector('.inline-link-layer');
-            if (!svg) return;
-            const viewerRect = viewer.getBoundingClientRect();
-            svg.setAttribute('viewBox', `0 0 \${viewerRect.width} \${viewerRect.height}`);
-            svg.innerHTML = inlineConnections.map(([from, to, color, width]) => {
-                const fromNode = viewer.querySelector(`[slot="hotspot-\${from}"]`);
-                const toNode = viewer.querySelector(`[slot="hotspot-\${to}"]`);
-                if (!fromNode || !toNode) return '';
-                const a = fromNode.getBoundingClientRect();
-                const b = toNode.getBoundingClientRect();
-                const x1 = a.left + a.width / 2 - viewerRect.left;
-                const y1 = a.top + a.height / 2 - viewerRect.top;
-                const x2 = b.left + b.width / 2 - viewerRect.left;
-                const y2 = b.top + b.height / 2 - viewerRect.top;
-                return `<line x1="\${x1}" y1="\${y1}" x2="\${x2}" y2="\${y2}"
-                    stroke="\${color}" stroke-width="\${width}" stroke-linecap="round" opacity="0.9" />`;
-            }).join('');
         };
 
         window.toggleHotspots = (visible) => {
@@ -133,8 +87,6 @@ const String modelViewerScript = '''
             buttons.forEach(button => {
                 button.style.display = visible ? 'block' : 'none';
             });
-            const links = viewer.querySelector('.inline-link-layer');
-            if (links) links.style.display = visible ? 'block' : 'none';
         };
 
         /* Error Hotspot 동적 생성 */
@@ -428,8 +380,6 @@ const String modelViewerScript = '''
         };
 
         viewer.addEventListener('load', hydrateMaterials);
-        viewer.addEventListener('camera-change', () => requestAnimationFrame(renderInlineLinks));
-        window.addEventListener('resize', () => requestAnimationFrame(renderInlineLinks));
         if (viewer.model) hydrateMaterials();
 
         window.toggleMaterials = () => runPartsAnimation(!isShowingParts);
