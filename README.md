@@ -95,6 +95,7 @@ cd pleos
 - LiDAR, GNSS, Camera 조합별 Autoware stack 전환
 - 센서 고장, TSN/FRER/Zonal 고장, 복합 환경 저하, MRM safe stop 시나리오
 - ADB broadcast 기반 CBOR fault payload 주입과 Flutter EventChannel 처리
+- 7인치 ESP 중앙 컨트롤러 및 USB 스위치 I/O 노드 실시간 연동
 
 ## 빠른 실행
 
@@ -189,6 +190,21 @@ flutter analyze
 flutter test
 flutter run -d emulator-5554 --debug --no-resident
 ```
+
+### 실물 ESP 연동 실행 순서
+
+`PLEOS Reconfig`가 ROII 모델을 사용하는 재구성 과제 앱입니다. 7인치 ESP의 CBOR 브리지를 먼저 실행한 다음 앱을 시작합니다.
+
+```bash
+# ioniq 저장소에서 실행
+./tools/esp_bridge/run.sh --serial /dev/tty.usbmodem59580282341
+
+# 이 저장소에서 실행
+cd apps/pleos_reconfig_console
+flutter run -d emulator-5554 --debug --no-resident
+```
+
+앱은 에뮬레이터에서 `ws://10.0.2.2:8766`으로 Mac 브리지에 접속합니다. 상단 `Controller`는 7인치 중앙 ESP, `Switch I/O`는 중앙 보드의 USB에 연결된 보조 ESP 상태를 뜻합니다. 보조 노드가 없으면 `Simulation`으로 표시되며 터치/앱 시나리오는 계속 사용할 수 있습니다.
 
 ## CBOR Fault Injection
 

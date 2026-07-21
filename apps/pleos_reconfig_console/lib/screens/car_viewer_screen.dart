@@ -5,6 +5,8 @@ import 'package:model_viewer_plus/model_viewer_plus.dart';
 import '../core/js_scripts.dart';
 import '../models/fault_data.dart';
 import '../providers/fault_provider.dart';
+import '../providers/hardware_reconfig_provider.dart';
+import '../services/hardware_reconfig_service.dart';
 import '../providers/viewer_service_provider.dart';
 
 class CarViewerScreen extends ConsumerStatefulWidget {
@@ -60,7 +62,12 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   @override
   Widget build(BuildContext context) {
     final faults = ref.watch(faultProvider).values.toList();
-    final mode = _ReconfigMode.fromScenario(_selectedScenario, faults);
+    final hardware =
+        ref.watch(hardwareReconfigProvider).valueOrNull ??
+        const HardwareReconfigState();
+    final mode = hardware.connected
+        ? _ReconfigMode.fromHardware(hardware.mode, faults)
+        : _ReconfigMode.fromScenario(_selectedScenario, faults);
 
     return Scaffold(
       body: Stack(
@@ -86,19 +93,38 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               _waitForJsAndInitialize();
             },
           ),
-          if (_topologyVisible) const Positioned.fill(child: IgnorePointer(child: _TopologyOverlay())),
-          Positioned(left: 14, right: 14, top: 10, child: _TopBar(mode: mode, scenario: _selectedScenario)),
+          if (_topologyVisible)
+            const Positioned.fill(
+              child: IgnorePointer(child: _TopologyOverlay()),
+            ),
+          Positioned(
+            left: 14,
+            right: 14,
+            top: 10,
+            child: _TopBar(
+              mode: mode,
+              scenario: _selectedScenario,
+              hardware: hardware,
+            ),
+          ),
           Positioned(
             left: 14,
             top: 78,
             bottom: 118,
-            child: _ScenarioRail(selected: _selectedScenario, onSelected: _applyScenario),
+            child: _ScenarioRail(
+              selected: _selectedScenario,
+              onSelected: _applyScenario,
+            ),
           ),
           Positioned(
             right: 14,
             top: 78,
             bottom: 118,
-            child: _EvidencePanel(scenario: _selectedScenario, mode: mode, faults: faults),
+            child: _EvidencePanel(
+              scenario: _selectedScenario,
+              mode: mode,
+              faults: faults,
+            ),
           ),
           Positioned(
             left: 248,
@@ -116,9 +142,12 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               metricsVisible: _metricsVisible,
               mode: mode,
               onToggleLabels: _toggleLabels,
-              onToggleTopology: () => setState(() => _topologyVisible = !_topologyVisible),
-              onToggleMetrics: () => setState(() => _metricsVisible = !_metricsVisible),
-              onToggleShell: () => ref.read(viewerServiceProvider).toggleMaterials(),
+              onToggleTopology: () =>
+                  setState(() => _topologyVisible = !_topologyVisible),
+              onToggleMetrics: () =>
+                  setState(() => _metricsVisible = !_metricsVisible),
+              onToggleShell: () =>
+                  ref.read(viewerServiceProvider).toggleMaterials(),
               onRecover: _recover,
             ),
           ),
@@ -136,10 +165,15 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.mode, required this.scenario});
+  const _TopBar({
+    required this.mode,
+    required this.scenario,
+    required this.hardware,
+  });
 
   final _ReconfigMode mode;
   final _ScenarioDef scenario;
+  final HardwareReconfigState hardware;
 
   @override
   Widget build(BuildContext context) {
@@ -149,17 +183,58 @@ class _TopBar extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            const Icon(Icons.account_tree_rounded, color: Color(0xFF155EEF), size: 20),
+            const Icon(
+              Icons.account_tree_rounded,
+              color: Color(0xFF155EEF),
+              size: 20,
+            ),
             const SizedBox(width: 8),
-            const Text('PLEOS Reconfig', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+            const Text(
+              'PLEOS Reconfig',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF0F172A),
+              ),
+            ),
             const SizedBox(width: 14),
-            _StatusPill(label: 'Scenario', value: scenario.title, color: scenario.color),
+            _StatusPill(
+              label: 'Controller',
+              value: hardware.connected
+                  ? 'ESP #${hardware.sequence}'
+                  : 'Offline',
+              color: hardware.connected
+                  ? const Color(0xFF0F766E)
+                  : const Color(0xFF64748B),
+            ),
+            const SizedBox(width: 8),
+            _StatusPill(
+              label: 'Switch I/O',
+              value: hardware.ioNodeConnected ? 'USB online' : 'Simulation',
+              color: hardware.ioNodeConnected
+                  ? const Color(0xFF0F766E)
+                  : const Color(0xFF64748B),
+            ),
+            const SizedBox(width: 8),
+            _StatusPill(
+              label: 'Scenario',
+              value: scenario.title,
+              color: scenario.color,
+            ),
             const SizedBox(width: 8),
             _StatusPill(label: 'Autoware', value: mode.name, color: mode.color),
             const SizedBox(width: 8),
-            _StatusPill(label: 'Safety goal', value: scenario.safetyGoal, color: mode.color),
+            _StatusPill(
+              label: 'Safety goal',
+              value: scenario.safetyGoal,
+              color: mode.color,
+            ),
             const SizedBox(width: 8),
-            const _StatusPill(label: 'Network', value: 'TSN/FRER', color: Color(0xFF155EEF)),
+            const _StatusPill(
+              label: 'Network',
+              value: 'TSN/FRER',
+              color: Color(0xFF155EEF),
+            ),
           ],
         ),
       ),
@@ -181,9 +256,23 @@ class _ScenarioRail extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Fault Scenarios', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+          const Text(
+            'Fault Scenarios',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF0F172A),
+            ),
+          ),
           const SizedBox(height: 4),
-          const Text('FMEA/HARA 기반 결함 주입', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Color(0xFF64748B))),
+          const Text(
+            'FMEA/HARA 기반 결함 주입',
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF64748B),
+            ),
+          ),
           const SizedBox(height: 10),
           Expanded(
             child: ListView.separated(
@@ -193,7 +282,9 @@ class _ScenarioRail extends StatelessWidget {
                 final scenario = _ScenarioDef.values[index];
                 final active = scenario == selected;
                 return Material(
-                  color: active ? scenario.color.withValues(alpha: 0.12) : Colors.white.withValues(alpha: 0.72),
+                  color: active
+                      ? scenario.color.withValues(alpha: 0.12)
+                      : Colors.white.withValues(alpha: 0.72),
                   borderRadius: BorderRadius.circular(8),
                   child: InkWell(
                     onTap: () => onSelected(scenario),
@@ -202,7 +293,11 @@ class _ScenarioRail extends StatelessWidget {
                       padding: const EdgeInsets.all(9),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: active ? scenario.color : const Color(0xFFE2E8F0)),
+                        border: Border.all(
+                          color: active
+                              ? scenario.color
+                              : const Color(0xFFE2E8F0),
+                        ),
                       ),
                       child: Row(
                         children: [
@@ -212,9 +307,27 @@ class _ScenarioRail extends StatelessWidget {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(scenario.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                                Text(
+                                  scenario.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w900,
+                                    color: Color(0xFF0F172A),
+                                  ),
+                                ),
                                 const SizedBox(height: 2),
-                                Text(scenario.category, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: Color(0xFF64748B))),
+                                Text(
+                                  scenario.category,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(0xFF64748B),
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -233,7 +346,11 @@ class _ScenarioRail extends StatelessWidget {
 }
 
 class _EvidencePanel extends StatelessWidget {
-  const _EvidencePanel({required this.scenario, required this.mode, required this.faults});
+  const _EvidencePanel({
+    required this.scenario,
+    required this.mode,
+    required this.faults,
+  });
 
   final _ScenarioDef scenario;
   final _ReconfigMode mode;
@@ -247,37 +364,94 @@ class _EvidencePanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Evidence / Validation', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+          const Text(
+            'Evidence / Validation',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF0F172A),
+            ),
+          ),
           const SizedBox(height: 8),
-          _EvidenceBlock(title: 'Fault chain', lines: [scenario.cause, scenario.effect]),
-          _EvidenceBlock(title: 'Reconfiguration', lines: [scenario.action, 'Mode: ${mode.name}', 'MRM: ${scenario.mrmPolicy}']),
+          _EvidenceBlock(
+            title: 'Fault chain',
+            lines: [scenario.cause, scenario.effect],
+          ),
+          _EvidenceBlock(
+            title: 'Reconfiguration',
+            lines: [
+              scenario.action,
+              'Mode: ${mode.name}',
+              'MRM: ${scenario.mrmPolicy}',
+            ],
+          ),
           _EvidenceBlock(title: 'Validation metrics', lines: scenario.metrics),
-          _EvidenceBlock(title: 'Report mapping', lines: scenario.reportMapping),
+          _EvidenceBlock(
+            title: 'Report mapping',
+            lines: scenario.reportMapping,
+          ),
           const SizedBox(height: 6),
-          const Text('Active faults', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF475569))),
+          const Text(
+            'Active faults',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF475569),
+            ),
+          ),
           const SizedBox(height: 6),
           Expanded(
             child: faults.isEmpty
-                ? const Center(child: Text('No active fault\nTriple sensor baseline', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF94A3B8))))
+                ? const Center(
+                    child: Text(
+                      'No active fault\nTriple sensor baseline',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF94A3B8),
+                      ),
+                    ),
+                  )
                 : ListView.separated(
                     itemCount: faults.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 6),
                     itemBuilder: (context, index) {
                       final fault = faults[index];
-                      final color = fault.severity >= 2 ? const Color(0xFFDC2626) : const Color(0xFFF59E0B);
+                      final color = fault.severity >= 2
+                          ? const Color(0xFFDC2626)
+                          : const Color(0xFFF59E0B);
                       return Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
                           color: color.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: color.withValues(alpha: 0.32)),
+                          border: Border.all(
+                            color: color.withValues(alpha: 0.32),
+                          ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(fault.target, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: color)),
+                            Text(
+                              fault.target,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                color: color,
+                              ),
+                            ),
                             const SizedBox(height: 2),
-                            Text(fault.faultType, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: Color(0xFF334155))),
+                            Text(
+                              fault.faultType,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF334155),
+                              ),
+                            ),
                           ],
                         ),
                       );
@@ -311,13 +485,32 @@ class _ModeCard extends StatelessWidget {
               children: [
                 Icon(mode.icon, color: mode.color, size: 22),
                 const SizedBox(width: 8),
-                Text(mode.name, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: mode.color)),
+                Text(
+                  mode.name,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: mode.color,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 9),
-            _ModeLine(label: 'Localization', value: mode.localization, color: mode.color),
-            _ModeLine(label: 'Fusion', value: scenario.fusion, color: mode.color),
-            _ModeLine(label: 'Planning', value: mode.planning, color: mode.color),
+            _ModeLine(
+              label: 'Localization',
+              value: mode.localization,
+              color: mode.color,
+            ),
+            _ModeLine(
+              label: 'Fusion',
+              value: scenario.fusion,
+              color: mode.color,
+            ),
+            _ModeLine(
+              label: 'Planning',
+              value: mode.planning,
+              color: mode.color,
+            ),
             _ModeLine(label: 'Control', value: mode.control, color: mode.color),
           ],
         ),
@@ -336,7 +529,14 @@ class _TimelinePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final steps = scenario.id == 'triple'
         ? ['Normal', 'Monitor', 'Validate']
-        : ['Inject', 'Detect', 'Reconfig', 'Switch', 'Validate', mode.isMrm ? 'MRM' : 'Recover'];
+        : [
+            'Inject',
+            'Detect',
+            'Reconfig',
+            'Switch',
+            'Validate',
+            mode.isMrm ? 'MRM' : 'Recover',
+          ];
     return _Glass(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: SingleChildScrollView(
@@ -344,7 +544,11 @@ class _TimelinePanel extends StatelessWidget {
         child: Row(
           children: [
             for (var i = 0; i < steps.length; i++) ...[
-              _TimelineStep(label: steps[i], active: true, color: i >= 2 ? mode.color : scenario.color),
+              _TimelineStep(
+                label: steps[i],
+                active: true,
+                color: i >= 2 ? mode.color : scenario.color,
+              ),
               if (i != steps.length - 1)
                 Container(
                   width: 22,
@@ -354,11 +558,23 @@ class _TimelinePanel extends StatelessWidget {
                 ),
             ],
             const SizedBox(width: 14),
-            _MetricChip(label: 'switch', value: scenario.switchTime, color: mode.color),
+            _MetricChip(
+              label: 'switch',
+              value: scenario.switchTime,
+              color: mode.color,
+            ),
             const SizedBox(width: 6),
-            _MetricChip(label: 'latency', value: scenario.latency, color: mode.color),
+            _MetricChip(
+              label: 'latency',
+              value: scenario.latency,
+              color: mode.color,
+            ),
             const SizedBox(width: 6),
-            _MetricChip(label: 'jitter', value: scenario.jitter, color: mode.color),
+            _MetricChip(
+              label: 'jitter',
+              value: scenario.jitter,
+              color: mode.color,
+            ),
           ],
         ),
       ),
@@ -400,11 +616,35 @@ class _BottomConsole extends StatelessWidget {
           alignment: WrapAlignment.center,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            _ToolButton(icon: Icons.label_rounded, label: labelsVisible ? 'Hide Labels' : 'Show Labels', active: labelsVisible, onTap: onToggleLabels),
-            _ToolButton(icon: Icons.account_tree_rounded, label: topologyVisible ? 'Hide Topology' : 'Show Topology', active: topologyVisible, onTap: onToggleTopology),
-            _ToolButton(icon: Icons.timeline_rounded, label: metricsVisible ? 'Hide Metrics' : 'Show Metrics', active: metricsVisible, onTap: onToggleMetrics),
-            _ToolButton(icon: Icons.layers_rounded, label: 'Vehicle shell', onTap: onToggleShell),
-            _ToolButton(icon: Icons.verified_user_rounded, label: mode.isMrm ? 'MRM validate' : 'Recover validate', active: mode.isFaulted, onTap: onRecover),
+            _ToolButton(
+              icon: Icons.label_rounded,
+              label: labelsVisible ? 'Hide Labels' : 'Show Labels',
+              active: labelsVisible,
+              onTap: onToggleLabels,
+            ),
+            _ToolButton(
+              icon: Icons.account_tree_rounded,
+              label: topologyVisible ? 'Hide Topology' : 'Show Topology',
+              active: topologyVisible,
+              onTap: onToggleTopology,
+            ),
+            _ToolButton(
+              icon: Icons.timeline_rounded,
+              label: metricsVisible ? 'Hide Metrics' : 'Show Metrics',
+              active: metricsVisible,
+              onTap: onToggleMetrics,
+            ),
+            _ToolButton(
+              icon: Icons.layers_rounded,
+              label: 'Vehicle shell',
+              onTap: onToggleShell,
+            ),
+            _ToolButton(
+              icon: Icons.verified_user_rounded,
+              label: mode.isMrm ? 'MRM validate' : 'Recover validate',
+              active: mode.isFaulted,
+              onTap: onRecover,
+            ),
           ],
         ),
       ),
@@ -446,9 +686,16 @@ class _TopologyPainter extends CustomPainter {
     canvas.drawLine(nodes['ADS']!, nodes['VCU']!, fallbackPaint);
     canvas.drawCircle(center, 2, Paint()..color = Colors.transparent);
     for (final entry in nodes.entries) {
-      final rect = Rect.fromCenter(center: entry.value, width: entry.key == 'ADS' ? 58 : 54, height: 26);
+      final rect = Rect.fromCenter(
+        center: entry.value,
+        width: entry.key == 'ADS' ? 58 : 54,
+        height: 26,
+      );
       final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(5));
-      canvas.drawRRect(rrect, Paint()..color = Colors.white.withValues(alpha: 0.78));
+      canvas.drawRRect(
+        rrect,
+        Paint()..color = Colors.white.withValues(alpha: 0.78),
+      );
       canvas.drawRRect(
         rrect,
         Paint()
@@ -457,7 +704,14 @@ class _TopologyPainter extends CustomPainter {
           ..strokeWidth = 1.5,
       );
       final tp = TextPainter(
-        text: TextSpan(text: entry.key, style: const TextStyle(color: Color(0xFF1D4ED8), fontSize: 10, fontWeight: FontWeight.w900)),
+        text: TextSpan(
+          text: entry.key,
+          style: const TextStyle(
+            color: Color(0xFF1D4ED8),
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, entry.value - Offset(tp.width / 2, tp.height / 2));
@@ -481,7 +735,14 @@ class _EvidenceBlock extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF475569))),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF475569),
+            ),
+          ),
           const SizedBox(height: 4),
           for (final line in lines)
             Padding(
@@ -489,8 +750,25 @@ class _EvidenceBlock extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('• ', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: Color(0xFF94A3B8))),
-                  Expanded(child: Text(line, style: const TextStyle(fontSize: 10.5, height: 1.2, fontWeight: FontWeight.w700, color: Color(0xFF334155)))),
+                  const Text(
+                    '• ',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF94A3B8),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      line,
+                      style: const TextStyle(
+                        fontSize: 10.5,
+                        height: 1.2,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF334155),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -501,7 +779,11 @@ class _EvidenceBlock extends StatelessWidget {
 }
 
 class _ModeLine extends StatelessWidget {
-  const _ModeLine({required this.label, required this.value, required this.color});
+  const _ModeLine({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   final String label;
   final String value;
@@ -514,8 +796,27 @@ class _ModeLine extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 88, child: Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF64748B)))),
-          Expanded(child: Text(value, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w900, color: color))),
+          SizedBox(
+            width: 88,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF64748B),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w900,
+                color: color,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -523,7 +824,11 @@ class _ModeLine extends StatelessWidget {
 }
 
 class _TimelineStep extends StatelessWidget {
-  const _TimelineStep({required this.label, required this.active, required this.color});
+  const _TimelineStep({
+    required this.label,
+    required this.active,
+    required this.color,
+  });
 
   final String label;
   final bool active;
@@ -537,18 +842,32 @@ class _TimelineStep extends StatelessWidget {
         Container(
           width: 18,
           height: 18,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: active ? color : const Color(0xFFE2E8F0)),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: active ? color : const Color(0xFFE2E8F0),
+          ),
           child: const Icon(Icons.check_rounded, color: Colors.white, size: 13),
         ),
         const SizedBox(height: 3),
-        Text(label, style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w900, color: Color(0xFF475569))),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 9.5,
+            fontWeight: FontWeight.w900,
+            color: Color(0xFF475569),
+          ),
+        ),
       ],
     );
   }
 }
 
 class _MetricChip extends StatelessWidget {
-  const _MetricChip({required this.label, required this.value, required this.color});
+  const _MetricChip({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   final String label;
   final String value;
@@ -558,12 +877,30 @@ class _MetricChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(7), border: Border.all(color: color.withValues(alpha: 0.26))),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: color.withValues(alpha: 0.26)),
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(label, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: Color(0xFF64748B))),
-          Text(value, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: color)),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF64748B),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
+          ),
         ],
       ),
     );
@@ -571,7 +908,11 @@ class _MetricChip extends StatelessWidget {
 }
 
 class _StatusPill extends StatelessWidget {
-  const _StatusPill({required this.label, required this.value, required this.color});
+  const _StatusPill({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   final String label;
   final String value;
@@ -581,12 +922,29 @@ class _StatusPill extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(7)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(7),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('$label: ', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: Color(0xFF64748B))),
-          Text(value, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: color)),
+          Text(
+            '$label: ',
+            style: const TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF64748B),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
+          ),
         ],
       ),
     );
@@ -594,7 +952,12 @@ class _StatusPill extends StatelessWidget {
 }
 
 class _ToolButton extends StatelessWidget {
-  const _ToolButton({required this.icon, required this.label, required this.onTap, this.active = false});
+  const _ToolButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.active = false,
+  });
 
   final IconData icon;
   final String label;
@@ -613,8 +976,27 @@ class _ToolButton extends StatelessWidget {
         child: Container(
           height: 36,
           padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(borderRadius: BorderRadius.circular(8), border: Border.all(color: active ? const Color(0xFFBFDBFE) : const Color(0xFFE2E8F0))),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: color, size: 16), const SizedBox(width: 6), Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: color))]),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: active ? const Color(0xFFBFDBFE) : const Color(0xFFE2E8F0),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: color, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -622,7 +1004,11 @@ class _ToolButton extends StatelessWidget {
 }
 
 class _Glass extends StatelessWidget {
-  const _Glass({required this.child, this.width, this.padding = const EdgeInsets.all(12)});
+  const _Glass({
+    required this.child,
+    this.width,
+    this.padding = const EdgeInsets.all(12),
+  });
 
   final Widget child;
   final double? width;
@@ -637,7 +1023,13 @@ class _Glass extends StatelessWidget {
         color: Colors.white.withValues(alpha: 0.86),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFE2E8F0)),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.07), blurRadius: 18, offset: const Offset(0, 7))],
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.07),
+            blurRadius: 18,
+            offset: const Offset(0, 7),
+          ),
+        ],
       ),
       child: child,
     );
@@ -697,7 +1089,11 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.4 / GNSS 0.3 / Camera 0.3',
       safetyGoal: 'Full DDT',
       mrmPolicy: 'standby',
-      metrics: ['Localization confidence normal', 'No topology degradation', 'Recovery validation armed'],
+      metrics: [
+        'Localization confidence normal',
+        'No topology degradation',
+        'Recovery validation armed',
+      ],
       reportMapping: ['인지범위별 삼중 센서 측위 모드', 'Lv.4 플랫폼 정상 주행 기준'],
       switchTime: '0ms',
       latency: '1ms',
@@ -716,7 +1112,11 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.6 / GNSS 0.0 / Camera 0.4',
       safetyGoal: 'No position jump',
       mrmPolicy: 'standby',
-      metrics: ['Mode switch time measured', 'Localization discontinuity check', 'Odometer cross-check passed'],
+      metrics: [
+        'Mode switch time measured',
+        'Localization discontinuity check',
+        'Odometer cross-check passed',
+      ],
       reportMapping: ['GNSS 오류 판정: 오도미터 이동거리 불일치', '이중 센서에서 단일/대체 측위 전환 영향 분석'],
       switchTime: '82ms',
       latency: '1ms',
@@ -735,7 +1135,11 @@ class _ScenarioDef {
       fusion: 'LiDAR side pair 0.5 / GNSS 0.2 / Camera 0.3',
       safetyGoal: 'Maintain DDT degraded',
       mrmPolicy: 'standby',
-      metrics: ['Point-cloud confidence down', 'Speed cap validated', 'No center-lane discontinuity'],
+      metrics: [
+        'Point-cloud confidence down',
+        'Speed cap validated',
+        'No center-lane discontinuity',
+      ],
       reportMapping: ['4개 라이다 기반 Lv.4 차량 플랫폼', '센서 고장 시 다른 센서 데이터로 시스템 조정'],
       switchTime: '96ms',
       latency: '1ms',
@@ -754,7 +1158,11 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.7 / GNSS 0.3 / Camera 0.0',
       safetyGoal: 'Lane-safe degraded',
       mrmPolicy: 'standby',
-      metrics: ['Lane feature unavailable', 'NDT localization stable', 'Speed cap 45km/h'],
+      metrics: [
+        'Lane feature unavailable',
+        'NDT localization stable',
+        'Speed cap 45km/h',
+      ],
       reportMapping: ['이중 센서 주행 모드', 'Autoware 측위/탐지/계획/제어 pipeline'],
       switchTime: '74ms',
       latency: '1ms',
@@ -773,7 +1181,11 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.0 / GNSS 1.0 / Camera 0.0',
       safetyGoal: 'Minimal risk ready',
       mrmPolicy: 'candidate',
-      metrics: ['Control authority reduced', 'No lane change', 'MRM trigger monitored'],
+      metrics: [
+        'Control authority reduced',
+        'No lane change',
+        'MRM trigger monitored',
+      ],
       reportMapping: ['단일 센서 주행 모드', '복구 불가능 결함 발생 시 단계적 저하'],
       switchTime: '118ms',
       latency: '1.4ms',
@@ -792,7 +1204,11 @@ class _ScenarioDef {
       fusion: 'Sensor fusion held until time base validated',
       safetyGoal: 'Bounded latency',
       mrmPolicy: 'standby',
-      metrics: ['PTP failover check', 'FRER path continuity', 'DetNet jitter threshold'],
+      metrics: [
+        'PTP failover check',
+        'FRER path continuity',
+        'DetNet jitter threshold',
+      ],
       reportMapping: ['TSN FRER 및 DetNet 지연시간 편차 보장', 'Zonal Gateway 오류검지 기능'],
       switchTime: '64ms',
       latency: '1ms',
@@ -811,8 +1227,15 @@ class _ScenarioDef {
       fusion: 'Fusion unchanged, network path reweighted',
       safetyGoal: 'No packet loss impact',
       mrmPolicy: 'standby',
-      metrics: ['Hitless switchover', 'Latency max under limit', 'No Autoware mode drop'],
-      reportMapping: ['Frame Replication and Elimination for Reliability', 'Automotive Ethernet 기반 통합 네트워크'],
+      metrics: [
+        'Hitless switchover',
+        'Latency max under limit',
+        'No Autoware mode drop',
+      ],
+      reportMapping: [
+        'Frame Replication and Elimination for Reliability',
+        'Automotive Ethernet 기반 통합 네트워크',
+      ],
       switchTime: '34ms',
       latency: '1ms',
       jitter: '0.5ms',
@@ -830,7 +1253,11 @@ class _ScenarioDef {
       fusion: 'Front sensors down-weighted, rear/side context held',
       safetyGoal: 'Fail-operational',
       mrmPolicy: 'standby/candidate',
-      metrics: ['Gateway isolation detected', 'Backup route active', 'Safety goal check'],
+      metrics: [
+        'Gateway isolation detected',
+        'Backup route active',
+        'Safety goal check',
+      ],
       reportMapping: ['Zonal 아키텍처 적용 요구사항', '데이터 수집 및 고장 진단/대응 구조'],
       switchTime: '126ms',
       latency: '1.6ms',
@@ -849,7 +1276,11 @@ class _ScenarioDef {
       fusion: 'Fusion unchanged, compute resource reallocated',
       safetyGoal: 'Bounded callback',
       mrmPolicy: 'standby',
-      metrics: ['Callback period checked', 'Resource schedule applied', 'Mode transition not required'],
+      metrics: [
+        'Callback period checked',
+        'Resource schedule applied',
+        'Mode transition not required',
+      ],
       reportMapping: ['Autoware pipeline 성능 영향 분석', '자원 스케줄링 기술 개발'],
       switchTime: '48ms',
       latency: '1.2ms',
@@ -868,7 +1299,11 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.2 / GNSS 0.5 / Camera 0.3',
       safetyGoal: 'Controlled degradation',
       mrmPolicy: 'candidate',
-      metrics: ['Perception confidence threshold', 'Planning route confidence', 'Speed cap 25km/h'],
+      metrics: [
+        'Perception confidence threshold',
+        'Planning route confidence',
+        'Speed cap 25km/h',
+      ],
       reportMapping: ['SOTIF 관점 원인 시나리오', '복합 결함 기반 시뮬레이터 검증'],
       switchTime: '142ms',
       latency: '1.8ms',
@@ -917,7 +1352,10 @@ class _ReconfigMode {
   final bool isFaulted;
   final bool isMrm;
 
-  factory _ReconfigMode.fromScenario(_ScenarioDef scenario, List<FaultData> faults) {
+  factory _ReconfigMode.fromScenario(
+    _ScenarioDef scenario,
+    List<FaultData> faults,
+  ) {
     if (scenario.id == 'triple' && faults.isEmpty) {
       return const _ReconfigMode(
         name: 'Triple sensor',
@@ -940,6 +1378,42 @@ class _ReconfigMode {
       icon: mrm ? Icons.emergency_rounded : Icons.change_circle_rounded,
       isFaulted: true,
       isMrm: mrm,
+    );
+  }
+
+  factory _ReconfigMode.fromHardware(String mode, List<FaultData> faults) {
+    if (mode == 'MRM') {
+      return const _ReconfigMode(
+        name: 'MRM safe stop',
+        localization: 'Dead reckoning to stop target',
+        planning: 'Safe stop trajectory',
+        control: 'Controlled stop + hazards',
+        color: Color(0xFFDC2626),
+        icon: Icons.emergency_rounded,
+        isFaulted: true,
+        isMrm: true,
+      );
+    }
+    final normalized = switch (mode) {
+      'TRIPLE' => 'Triple sensor',
+      'DUAL' => 'Dual sensor',
+      'SINGLE' => 'Single sensor',
+      _ => mode,
+    };
+    final color = mode == 'TRIPLE'
+        ? const Color(0xFF16A34A)
+        : const Color(0xFFF59E0B);
+    return _ReconfigMode(
+      name: normalized,
+      localization: '$normalized confirmed by ESP controller',
+      planning: mode == 'TRIPLE' ? 'Normal route' : 'Constraint-aware route',
+      control: mode == 'TRIPLE' ? 'Normal MPC control' : 'Confidence-based cap',
+      color: color,
+      icon: mode == 'TRIPLE'
+          ? Icons.verified_rounded
+          : Icons.change_circle_rounded,
+      isFaulted: faults.isNotEmpty,
+      isMrm: false,
     );
   }
 }
