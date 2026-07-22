@@ -245,10 +245,12 @@ void refreshUi() {
   for (auto &channel : channels) {
     if (channel.value == nullptr || channel.button == nullptr) continue;
     lv_label_set_text(channel.value, healthName(channel.health));
-    lv_obj_set_style_bg_color(channel.button, lv_color_hex(healthColor(channel.health)), 0);
+    lv_obj_set_style_bg_color(channel.button, lv_color_hex(0x182126), 0);
+    lv_obj_set_style_border_color(channel.button, lv_color_hex(healthColor(channel.health)), 0);
+    lv_obj_set_style_text_color(channel.value, lv_color_hex(healthColor(channel.health)), 0);
   }
   lv_label_set_text_fmt(modeLabel, "AUTOWARE MODE  %s", effectiveMode);
-  lv_obj_set_style_text_color(modeLabel, lv_color_hex(!strcmp(effectiveMode, "MRM") ? 0xC84942 : 0x177C62), 0);
+  lv_obj_set_style_text_color(modeLabel, lv_color_hex(!strcmp(effectiveMode, "MRM") ? 0xFF6A61 : 0x66D6B1), 0);
   const int activePaths = static_cast<int>(available("tsn_front_a")) +
                           static_cast<int>(available("tsn_front_b")) +
                           static_cast<int>(available("tsn_rear"));
@@ -257,15 +259,15 @@ void refreshUi() {
                         (activePaths > 0 ? "REDUNDANT ROUTING" : "NETWORK MRM"),
                         activePaths);
   lv_obj_set_style_text_color(networkLabel,
-                              lv_color_hex(activePaths == 3 ? 0x177C62 :
-                                           (activePaths > 0 ? 0xB87512 : 0xC84942)), 0);
+                              lv_color_hex(activePaths == 3 ? 0x66D6B1 :
+                                           (activePaths > 0 ? 0xF0A83B : 0xFF6A61)), 0);
   lv_label_set_text(eventLabel, lastEvent);
   lv_label_set_text(linkLabel, ioNodeConnected
                                    ? (bleConnected ? "BLE ONLINE  |  NOW TX  |  I/O ONLINE"
                                                    : "BLE WAITING |  NOW TX  |  I/O ONLINE")
                                    : (bleConnected ? "BLE ONLINE  |  NOW TX  |  I/O OFFLINE"
                                                    : "BLE WAITING |  NOW TX  |  I/O OFFLINE"));
-  lv_obj_set_style_text_color(linkLabel, lv_color_hex(ioNodeConnected ? 0x177C62 : 0x65727C), 0);
+  lv_obj_set_style_text_color(linkLabel, lv_color_hex(ioNodeConnected ? 0x66D6B1 : 0x92A0A5), 0);
 }
 
 void sendNodeCommand(const String &command) {
@@ -497,15 +499,19 @@ lv_obj_t *makeCard(lv_obj_t *parent, Channel &channel, int x, int y, int width) 
   lv_obj_set_size(button, width, 66);
   lv_obj_set_style_radius(button, 5, 0);
   lv_obj_set_style_shadow_width(button, 0, 0);
-  lv_obj_set_style_bg_color(button, lv_color_hex(healthColor(channel.health)), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x182126), 0);
+  lv_obj_set_style_border_width(button, 2, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(healthColor(channel.health)), 0);
   lv_obj_add_event_cb(button, channelPressed, LV_EVENT_CLICKED, &channel);
   auto *title = lv_label_create(button);
   lv_label_set_text(title, channel.label);
   lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE8ECEE), 0);
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, -4, -4);
   channel.value = lv_label_create(button);
   lv_label_set_text(channel.value, "NORMAL");
   lv_obj_set_style_text_font(channel.value, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(channel.value, lv_color_hex(healthColor(channel.health)), 0);
   lv_obj_align(channel.value, LV_ALIGN_BOTTOM_LEFT, -4, 4);
   channel.button = button;
   return button;
@@ -542,8 +548,8 @@ void makePathAction(lv_obj_t *parent, const char *text, int x, intptr_t action,
 
 void createUi() {
   auto *screen = lv_scr_act();
-  lv_obj_set_style_bg_color(screen, lv_color_hex(0xF3F5F7), 0);
-  lv_obj_set_style_text_color(screen, lv_color_hex(0x17202B), 0);
+  lv_obj_set_style_bg_color(screen, lv_color_hex(0x0B0F11), 0);
+  lv_obj_set_style_text_color(screen, lv_color_hex(0xF4F7F7), 0);
 
   auto *title = lv_label_create(screen);
   lv_label_set_text(title, "PLEOS NETWORK RECONFIG");
@@ -560,7 +566,7 @@ void createUi() {
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(0x92A0A5), 0);
   lv_obj_align(linkLabel, LV_ALIGN_TOP_RIGHT, -18, 57);
   eventLabel = lv_label_create(screen);
-  lv_obj_set_style_text_color(eventLabel, lv_color_hex(0x65727C), 0);
+  lv_obj_set_style_text_color(eventLabel, lv_color_hex(0x92A0A5), 0);
   lv_obj_align(eventLabel, LV_ALIGN_TOP_RIGHT, -18, 83);
 
   channels[0].label = "PATH 1  A <-> REAR";
@@ -569,11 +575,12 @@ void createUi() {
   makeCard(screen, channels[0], 18, 108, 240);
   makeCard(screen, channels[1], 280, 108, 240);
   makeCard(screen, channels[2], 542, 108, 240);
+  lv_obj_set_style_border_width(channels[2].button, 3, 0);
 
   auto *role = lv_label_create(screen);
   lv_label_set_text(role, "7-INCH NODE  |  FRONT A-B INLINE INJECTOR  |  PATH 3 OWNER");
   lv_obj_set_style_text_font(role, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(role, lv_color_hex(0x315E87), 0);
+  lv_obj_set_style_text_color(role, lv_color_hex(0x6CC7E8), 0);
   lv_obj_set_pos(role, 18, 198);
 
   auto *topology = lv_label_create(screen);
@@ -582,17 +589,18 @@ void createUi() {
                     "     \\ PATH 1             PATH 2 /\n"
                     "                  REAR SWITCH");
   lv_obj_set_style_text_font(topology, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(topology, lv_color_hex(0xDCE3E6), 0);
   lv_obj_set_style_text_align(topology, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_width(topology, 764);
   lv_obj_set_pos(topology, 18, 239);
 
   auto *hint = lv_label_create(screen);
   lv_label_set_text(hint, "ESP-NOW synchronized  |  One action keeps the other two paths NORMAL");
-  lv_obj_set_style_text_color(hint, lv_color_hex(0x65727C), 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x89959A), 0);
   lv_obj_set_pos(hint, 19, 369);
-  makePathAction(screen, "PATH 1 LINK DOWN", 18, 1, 0x315E87);
-  makePathAction(screen, "PATH 2 LINK DOWN", 214, 2, 0x315E87);
-  makePathAction(screen, "PATH 3 LINK DOWN", 410, 3, 0xB87512);
+  makePathAction(screen, "PATH 1 LINK DOWN", 18, 1, 0x263942);
+  makePathAction(screen, "PATH 2 LINK DOWN", 214, 2, 0x263942);
+  makePathAction(screen, "PATH 3 LINK DOWN", 410, 3, 0xA66B17);
   makePathAction(screen, "RECOVER ALL", 606, 4, 0x177C62);
   refreshUi();
 }
