@@ -18,7 +18,6 @@ class CarViewerScreen extends ConsumerStatefulWidget {
 
 class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   var _labelsVisible = false;
-  var _topologyVisible = false;
   var _metricsVisible = true;
   var _pathPanelVisible = false;
   _ScenarioDef _selectedScenario = _ScenarioDef.values.first;
@@ -138,10 +137,6 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               _waitForJsAndInitialize();
             },
           ),
-          if (_topologyVisible)
-            const Positioned.fill(
-              child: IgnorePointer(child: _TopologyOverlay()),
-            ),
           Positioned(
             left: 14,
             right: 14,
@@ -188,13 +183,10 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
             bottom: 14,
             child: _BottomConsole(
               labelsVisible: _labelsVisible,
-              topologyVisible: _topologyVisible,
               metricsVisible: _metricsVisible,
               pathPanelVisible: _pathPanelVisible,
               mode: mode,
               onToggleLabels: _toggleLabels,
-              onToggleTopology: () =>
-                  setState(() => _topologyVisible = !_topologyVisible),
               onToggleMetrics: () =>
                   setState(() => _metricsVisible = !_metricsVisible),
               onTogglePathPanel: () =>
@@ -766,12 +758,10 @@ class _TimelinePanel extends StatelessWidget {
 class _BottomConsole extends StatelessWidget {
   const _BottomConsole({
     required this.labelsVisible,
-    required this.topologyVisible,
     required this.metricsVisible,
     required this.pathPanelVisible,
     required this.mode,
     required this.onToggleLabels,
-    required this.onToggleTopology,
     required this.onToggleMetrics,
     required this.onTogglePathPanel,
     required this.onToggleShell,
@@ -779,12 +769,10 @@ class _BottomConsole extends StatelessWidget {
   });
 
   final bool labelsVisible;
-  final bool topologyVisible;
   final bool metricsVisible;
   final bool pathPanelVisible;
   final _ReconfigMode mode;
   final VoidCallback onToggleLabels;
-  final VoidCallback onToggleTopology;
   final VoidCallback onToggleMetrics;
   final VoidCallback onTogglePathPanel;
   final VoidCallback onToggleShell;
@@ -806,12 +794,6 @@ class _BottomConsole extends StatelessWidget {
               label: labelsVisible ? 'Hide Labels' : 'Show Labels',
               active: labelsVisible,
               onTap: onToggleLabels,
-            ),
-            _ToolButton(
-              icon: Icons.account_tree_rounded,
-              label: topologyVisible ? 'Hide Topology' : 'Show Topology',
-              active: topologyVisible,
-              onTap: onToggleTopology,
             ),
             _ToolButton(
               icon: Icons.timeline_rounded,
@@ -841,76 +823,6 @@ class _BottomConsole extends StatelessWidget {
       ),
     );
   }
-}
-
-class _TopologyOverlay extends StatelessWidget {
-  const _TopologyOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(painter: _TopologyPainter());
-  }
-}
-
-class _TopologyPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width * 0.52, size.height * 0.50);
-    final nodes = {
-      'ZG-FL': Offset(size.width * 0.43, size.height * 0.58),
-      'ZG-FR': Offset(size.width * 0.58, size.height * 0.58),
-      'ZG-R': Offset(size.width * 0.54, size.height * 0.39),
-      'ADS': Offset(size.width * 0.50, size.height * 0.48),
-      'VCU': Offset(size.width * 0.45, size.height * 0.42),
-    };
-    final linkPaint = Paint()
-      ..color = const Color(0xFF4EA1FF).withValues(alpha: 0.26)
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke;
-    final fallbackPaint = Paint()
-      ..color = const Color(0xFFF59E0B).withValues(alpha: 0.36)
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-    canvas.drawLine(nodes['ZG-FL']!, nodes['ADS']!, linkPaint);
-    canvas.drawLine(nodes['ZG-FR']!, nodes['ADS']!, linkPaint);
-    canvas.drawLine(nodes['ZG-R']!, nodes['ADS']!, linkPaint);
-    canvas.drawLine(nodes['ADS']!, nodes['VCU']!, fallbackPaint);
-    canvas.drawCircle(center, 2, Paint()..color = Colors.transparent);
-    for (final entry in nodes.entries) {
-      final rect = Rect.fromCenter(
-        center: entry.value,
-        width: entry.key == 'ADS' ? 58 : 54,
-        height: 26,
-      );
-      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(5));
-      canvas.drawRRect(
-        rrect,
-        Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: 0.94),
-      );
-      canvas.drawRRect(
-        rrect,
-        Paint()
-          ..color = const Color(0xFF4EA1FF).withValues(alpha: 0.48)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5,
-      );
-      final tp = TextPainter(
-        text: TextSpan(
-          text: entry.key,
-          style: const TextStyle(
-            color: Color(0xFF76B8FF),
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, entry.value - Offset(tp.width / 2, tp.height / 2));
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _EvidenceBlock extends StatelessWidget {

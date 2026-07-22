@@ -49,6 +49,7 @@ Channel channels[] = {
 
 constexpr size_t kChannelCount = sizeof(channels) / sizeof(channels[0]);
 lv_obj_t *modeLabel;
+lv_obj_t *networkLabel;
 lv_obj_t *linkLabel;
 lv_obj_t *eventLabel;
 uint32_t sequenceNumber = 0;
@@ -242,18 +243,29 @@ void deriveMode() {
 void refreshUi() {
   deriveMode();
   for (auto &channel : channels) {
+    if (channel.value == nullptr || channel.button == nullptr) continue;
     lv_label_set_text(channel.value, healthName(channel.health));
     lv_obj_set_style_bg_color(channel.button, lv_color_hex(healthColor(channel.health)), 0);
   }
   lv_label_set_text_fmt(modeLabel, "AUTOWARE MODE  %s", effectiveMode);
-  lv_obj_set_style_text_color(modeLabel, lv_color_hex(!strcmp(effectiveMode, "MRM") ? 0xFF6A61 : 0x66D6B1), 0);
+  lv_obj_set_style_text_color(modeLabel, lv_color_hex(!strcmp(effectiveMode, "MRM") ? 0xC84942 : 0x177C62), 0);
+  const int activePaths = static_cast<int>(available("tsn_front_a")) +
+                          static_cast<int>(available("tsn_front_b")) +
+                          static_cast<int>(available("tsn_rear"));
+  lv_label_set_text_fmt(networkLabel, "%s  |  %d/3 LINKS ACTIVE",
+                        activePaths == 3 ? "NETWORK NOMINAL" :
+                        (activePaths > 0 ? "REDUNDANT ROUTING" : "NETWORK MRM"),
+                        activePaths);
+  lv_obj_set_style_text_color(networkLabel,
+                              lv_color_hex(activePaths == 3 ? 0x177C62 :
+                                           (activePaths > 0 ? 0xB87512 : 0xC84942)), 0);
   lv_label_set_text(eventLabel, lastEvent);
   lv_label_set_text(linkLabel, ioNodeConnected
                                    ? (bleConnected ? "BLE ONLINE  |  NOW TX  |  I/O ONLINE"
                                                    : "BLE WAITING |  NOW TX  |  I/O ONLINE")
                                    : (bleConnected ? "BLE ONLINE  |  NOW TX  |  I/O OFFLINE"
                                                    : "BLE WAITING |  NOW TX  |  I/O OFFLINE"));
-  lv_obj_set_style_text_color(linkLabel, lv_color_hex(ioNodeConnected ? 0x66D6B1 : 0x92A0A5), 0);
+  lv_obj_set_style_text_color(linkLabel, lv_color_hex(ioNodeConnected ? 0x177C62 : 0x65727C), 0);
 }
 
 void sendNodeCommand(const String &command) {
@@ -273,6 +285,34 @@ void channelPressed(lv_event_t *event) {
 
 void setAllHealthy() {
   for (auto &channel : channels) channel.health = Health::healthy;
+}
+
+void setExclusivePathFault(int path, bool forwardToNode = true) {
+  if (path < 1 || path > 3) return;
+  for (int i = 0; i < 3; ++i) channels[i].health = Health::healthy;
+  channels[path - 1].health = Health::failed;
+  lastEvent = "Exclusive path Link Down";
+  refreshUi();
+  if (forwardToNode) {
+    for (int i = 0; i < 3; ++i) {
+      sendNodeCommand(String("!CHANNEL:") + channels[i].id + ":" +
+                      healthName(channels[i].health));
+    }
+  }
+  sendState("path_fault", channels[path - 1].id);
+}
+
+void pathActionPressed(lv_event_t *event) {
+  const intptr_t action = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
+  if (action >= 1 && action <= 3) {
+    setExclusivePathFault(static_cast<int>(action));
+    return;
+  }
+  setAllHealthy();
+  lastEvent = "All network paths recovered";
+  refreshUi();
+  sendNodeCommand("!RECOVER");
+  sendState("recovered", "network");
 }
 
 void scenarioPressed(lv_event_t *event) {
@@ -342,20 +382,9 @@ void processCommand(const String &command, bool forwardToNode = true) {
   }
   if (command.startsWith("!PATH:")) {
     const int path = command.substring(6).toInt();
-    if (path < 1 || path > 3) return;
-    for (int i = 0; i < 3; ++i) channels[i].health = Health::healthy;
-    channels[path - 1].health = Health::failed;
-    lastEvent = "Exclusive path fault injected";
     lvgl_port_lock(-1);
-    refreshUi();
+    setExclusivePathFault(path, forwardToNode);
     lvgl_port_unlock();
-    if (forwardToNode) {
-      for (int i = 0; i < 3; ++i) {
-        sendNodeCommand(String("!CHANNEL:") + channels[i].id + ":" +
-                        healthName(channels[i].health));
-      }
-    }
-    sendState("path_fault", channels[path - 1].id);
     return;
   }
   if (!command.startsWith("!CHANNEL:")) return;
@@ -495,41 +524,76 @@ void makeScenario(lv_obj_t *parent, const char *text, int x, intptr_t scenario, 
   lv_obj_center(label);
 }
 
+void makePathAction(lv_obj_t *parent, const char *text, int x, intptr_t action,
+                    uint32_t color) {
+  auto *button = lv_btn_create(parent);
+  lv_obj_set_pos(button, x, 405);
+  lv_obj_set_size(button, 180, 56);
+  lv_obj_set_style_radius(button, 5, 0);
+  lv_obj_set_style_shadow_width(button, 0, 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
+  lv_obj_add_event_cb(button, pathActionPressed, LV_EVENT_CLICKED,
+                      reinterpret_cast<void *>(action));
+  auto *label = lv_label_create(button);
+  lv_label_set_text(label, text);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_center(label);
+}
+
 void createUi() {
   auto *screen = lv_scr_act();
-  lv_obj_set_style_bg_color(screen, lv_color_hex(0x101517), 0);
-  lv_obj_set_style_text_color(screen, lv_color_hex(0xF4F7F7), 0);
+  lv_obj_set_style_bg_color(screen, lv_color_hex(0xF3F5F7), 0);
+  lv_obj_set_style_text_color(screen, lv_color_hex(0x17202B), 0);
 
   auto *title = lv_label_create(screen);
-  lv_label_set_text(title, "PLEOS RECONFIG CONTROLLER");
+  lv_label_set_text(title, "PLEOS NETWORK RECONFIG");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
   lv_obj_set_pos(title, 18, 15);
   modeLabel = lv_label_create(screen);
   lv_obj_set_style_text_font(modeLabel, &lv_font_montserrat_16, 0);
   lv_obj_align(modeLabel, LV_ALIGN_TOP_RIGHT, -18, 19);
+  networkLabel = lv_label_create(screen);
+  lv_obj_set_style_text_font(networkLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_pos(networkLabel, 18, 58);
   linkLabel = lv_label_create(screen);
-  lv_label_set_text(linkLabel, "MAC LINK  READY   |   I/O NODE  OFFLINE");
+  lv_label_set_text(linkLabel, "BLE WAITING  |  NOW TX");
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(0x92A0A5), 0);
-  lv_obj_set_pos(linkLabel, 19, 49);
+  lv_obj_align(linkLabel, LV_ALIGN_TOP_RIGHT, -18, 57);
   eventLabel = lv_label_create(screen);
-  lv_obj_set_style_text_color(eventLabel, lv_color_hex(0xB5C0C3), 0);
-  lv_obj_align(eventLabel, LV_ALIGN_TOP_RIGHT, -18, 49);
+  lv_obj_set_style_text_color(eventLabel, lv_color_hex(0x65727C), 0);
+  lv_obj_align(eventLabel, LV_ALIGN_TOP_RIGHT, -18, 83);
 
-  makeCard(screen, channels[0], 18, 82, 240);
-  makeCard(screen, channels[1], 280, 82, 240);
-  makeCard(screen, channels[2], 542, 82, 240);
-  for (int i = 0; i < 4; ++i) makeCard(screen, channels[3 + i], 18 + i * 196, 171, 174);
-  makeCard(screen, channels[7], 18, 260, 370);
-  makeCard(screen, channels[8], 412, 260, 370);
+  channels[0].label = "PATH 1  A <-> REAR";
+  channels[1].label = "PATH 2  B <-> REAR";
+  channels[2].label = "PATH 3  A <-> B";
+  makeCard(screen, channels[0], 18, 108, 240);
+  makeCard(screen, channels[1], 280, 108, 240);
+  makeCard(screen, channels[2], 542, 108, 240);
+
+  auto *role = lv_label_create(screen);
+  lv_label_set_text(role, "7-INCH NODE  |  FRONT A-B INLINE INJECTOR  |  PATH 3 OWNER");
+  lv_obj_set_style_text_font(role, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(role, lv_color_hex(0x315E87), 0);
+  lv_obj_set_pos(role, 18, 198);
+
+  auto *topology = lv_label_create(screen);
+  lv_label_set_text(topology,
+                    "FRONT A   ===== PATH 3 =====   FRONT B\n"
+                    "     \\ PATH 1             PATH 2 /\n"
+                    "                  REAR SWITCH");
+  lv_obj_set_style_text_font(topology, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_align(topology, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_width(topology, 764);
+  lv_obj_set_pos(topology, 18, 239);
 
   auto *hint = lv_label_create(screen);
-  lv_label_set_text(hint, "Tap channel to inject/recover  |  ESP-NOW path relay link armed");
-  lv_obj_set_style_text_color(hint, lv_color_hex(0x89959A), 0);
-  lv_obj_set_pos(hint, 19, 349);
-  makeScenario(screen, "LiDAR FL LOSS", 18, 1, 0x345F79);
-  makeScenario(screen, "DUAL SENSOR", 214, 2, 0x735E2E);
-  makeScenario(screen, "FRONT TSN / MRM", 410, 3, 0xA3423C);
-  makeScenario(screen, "RECOVER ALL", 606, 4, 0x177C62);
+  lv_label_set_text(hint, "ESP-NOW synchronized  |  One action keeps the other two paths NORMAL");
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x65727C), 0);
+  lv_obj_set_pos(hint, 19, 369);
+  makePathAction(screen, "PATH 1 LINK DOWN", 18, 1, 0x315E87);
+  makePathAction(screen, "PATH 2 LINK DOWN", 214, 2, 0x315E87);
+  makePathAction(screen, "PATH 3 LINK DOWN", 410, 3, 0xB87512);
+  makePathAction(screen, "RECOVER ALL", 606, 4, 0x177C62);
   refreshUi();
 }
 
