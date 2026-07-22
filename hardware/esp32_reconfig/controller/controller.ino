@@ -17,10 +17,15 @@ namespace {
 
 constexpr uint8_t kProtocolVersion = 1;
 constexpr uint32_t kHeartbeatMs = 1000;
-constexpr uint32_t kEspNowPeriodMs = 250;
+constexpr uint32_t kEspNowPeriodMs = 100;
+constexpr uint32_t kPathAckTimeoutMs = 5000;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
 constexpr uint32_t kPathAckMagic = 0x5041434B;
+constexpr uint8_t kPathNodeMacs[][ESP_NOW_ETH_ALEN] = {
+    {0xA8, 0x42, 0xE3, 0x3D, 0x70, 0xF8},  // Path 1
+    {0xA8, 0x42, 0xE3, 0x3D, 0x84, 0xD8},  // Path 2
+};
 constexpr bool kPhysicalOutputsEnabled = false;
 constexpr char kBleDeviceName[] = "PLEOS-RECONFIG";
 constexpr char kBleServiceUuid[] = "7d2f0001-7c7a-4f7b-9b51-0af9a281d110";
@@ -53,7 +58,8 @@ lv_obj_t *modeLabel;
 lv_obj_t *networkLabel;
 lv_obj_t *linkLabel;
 lv_obj_t *eventLabel;
-lv_obj_t *heartbeatArc;
+lv_obj_t *heartbeatDot;
+lv_obj_t *heartbeatLabel;
 uint32_t sequenceNumber = 0;
 uint32_t lastHeartbeat = 0;
 const char *effectiveMode = "TRIPLE";
@@ -69,10 +75,15 @@ BLECharacteristic *bleControl = nullptr;
 volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
 uint32_t lastEspNowAt = 0;
+uint32_t lastEspNowDiscoveryAt = 0;
 uint32_t espNowSequence = 0;
-uint32_t lastArcAt = 0;
+uint32_t lastPulseAt = 0;
 volatile uint32_t pathAckAt[2] = {0, 0};
 volatile bool pathAckPending = false;
+
+bool isPathOnline(size_t index, uint32_t now = millis()) {
+  return index < 2 && pathAckAt[index] != 0 && now - pathAckAt[index] < kPathAckTimeoutMs;
+}
 
 struct __attribute__((packed)) PathNowFrame {
   uint32_t magic;
@@ -190,16 +201,26 @@ void onEspNowReceive(const esp_now_recv_info_t *, const uint8_t *data, int lengt
 
 void startEspNow() {
   WiFi.mode(WIFI_STA);
+  esp_wifi_set_ps(WIFI_PS_NONE);
   esp_wifi_set_channel(kEspNowChannel, WIFI_SECOND_CHAN_NONE);
   if (esp_now_init() != ESP_OK) {
     Serial.println("!ESPNOW:INIT_FAILED");
     return;
   }
-  esp_now_peer_info_t peer{};
-  memset(peer.peer_addr, 0xFF, ESP_NOW_ETH_ALEN);
-  peer.channel = kEspNowChannel;
-  peer.encrypt = false;
-  if (esp_now_add_peer(&peer) != ESP_OK) Serial.println("!ESPNOW:PEER_FAILED");
+  for (const auto &mac : kPathNodeMacs) {
+    esp_now_peer_info_t peer{};
+    memcpy(peer.peer_addr, mac, ESP_NOW_ETH_ALEN);
+    peer.channel = kEspNowChannel;
+    peer.ifidx = WIFI_IF_STA;
+    peer.encrypt = false;
+    if (esp_now_add_peer(&peer) != ESP_OK) Serial.println("!ESPNOW:PEER_FAILED");
+  }
+  esp_now_peer_info_t discoveryPeer{};
+  memset(discoveryPeer.peer_addr, 0xFF, ESP_NOW_ETH_ALEN);
+  discoveryPeer.channel = kEspNowChannel;
+  discoveryPeer.ifidx = WIFI_IF_STA;
+  discoveryPeer.encrypt = false;
+  if (esp_now_add_peer(&discoveryPeer) != ESP_OK) Serial.println("!ESPNOW:DISCOVERY_FAILED");
   esp_now_register_recv_cb(onEspNowReceive);
 }
 
@@ -209,8 +230,17 @@ void sendEspNowState() {
   if (channels[1].health != Health::healthy) frame.isolatedMask |= 0x02;
   if (channels[2].health != Health::healthy) frame.isolatedMask |= 0x04;
   frame.crc = crc16(reinterpret_cast<const uint8_t *>(&frame), sizeof(frame) - sizeof(frame.crc));
-  static const uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-  esp_now_send(broadcast, reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
+  const uint32_t now = millis();
+  for (size_t index = 0; index < 2; ++index) {
+    if (isPathOnline(index, now)) {
+      esp_now_send(kPathNodeMacs[index], reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
+    }
+  }
+  if (now - lastEspNowDiscoveryAt >= 1000) {
+    lastEspNowDiscoveryAt = now;
+    static const uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    esp_now_send(broadcast, reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
+  }
 }
 
 void sendState(const char *eventType, const char *channelId = "") {
@@ -291,8 +321,8 @@ void refreshUi() {
                                            (activePaths > 0 ? 0xF0A83B : 0xFF6A61)), 0);
   lv_label_set_text(eventLabel, lastEvent);
   const uint32_t now = millis();
-  const bool path1Online = now - pathAckAt[0] < 2500;
-  const bool path2Online = now - pathAckAt[1] < 2500;
+  const bool path1Online = isPathOnline(0, now);
+  const bool path2Online = isPathOnline(1, now);
   lv_label_set_text_fmt(linkLabel, "BLE %s | P1 %s | P2 %s",
                         bleConnected ? "ON" : "WAIT",
                         path1Online ? "ACK" : "--",
@@ -373,6 +403,38 @@ void pathActionPressed(lv_event_t *event) {
   refreshUi();
   sendNodeCommand("!RECOVER");
   sendState("recovered", "network");
+}
+
+void sensorActionPressed(lv_event_t *event) {
+  const intptr_t action = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
+  for (int i = 3; i < 9; ++i) channels[i].health = Health::healthy;
+  if (action == 0) {
+    channels[3].health = Health::failed;
+    lastEvent = "LiDAR FL fault";
+  } else if (action == 1) {
+    channels[4].health = Health::failed;
+    lastEvent = "LiDAR FR fault";
+  } else if (action == 2) {
+    channels[5].health = Health::failed;
+    channels[6].health = Health::failed;
+    lastEvent = "Rear LiDAR fault";
+  } else if (action == 3) {
+    channels[8].health = Health::failed;
+    lastEvent = "Camera fault";
+  } else if (action == 4) {
+    channels[7].health = Health::failed;
+    lastEvent = "GNSS fault";
+  } else {
+    channels[7].health = Health::degraded;
+    channels[8].health = Health::failed;
+    lastEvent = "GNSS degraded + Camera fault";
+  }
+  refreshUi();
+  for (int i = 3; i < 9; ++i) {
+    sendNodeCommand(String("!CHANNEL:") + channels[i].id + ":" +
+                    healthName(channels[i].health));
+  }
+  sendState("sensor_fault", channels[action == 4 ? 7 : (action == 3 ? 8 : 3)].id);
 }
 
 void scenarioPressed(lv_event_t *event) {
@@ -481,6 +543,11 @@ void publishBleState(const char *eventType, bool fullSnapshot) {
   for (const auto &channel : channels) {
     notifyBle(String("!CHANNEL:") + channel.id + ":" + healthName(channel.health));
   }
+  const uint32_t now = millis();
+  notifyBle(String("!PATHNODE:1:") +
+            (isPathOnline(0, now) ? "ONLINE" : "OFFLINE"));
+  notifyBle(String("!PATHNODE:2:") +
+            (isPathOnline(1, now) ? "ONLINE" : "OFFLINE"));
   notifyBle(String("!EVENT:") + eventType);
 }
 
@@ -604,6 +671,22 @@ void makePathAction(lv_obj_t *parent, const char *text, int x, int y, int width,
   lv_obj_center(label);
 }
 
+void makeSensorAction(lv_obj_t *parent, const char *text, int x, int y,
+                      intptr_t action, uint32_t color) {
+  auto *button = lv_btn_create(parent);
+  lv_obj_set_pos(button, x, y);
+  lv_obj_set_size(button, 226, 54);
+  lv_obj_set_style_radius(button, 5, 0);
+  lv_obj_set_style_shadow_width(button, 0, 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
+  lv_obj_add_event_cb(button, sensorActionPressed, LV_EVENT_CLICKED,
+                      reinterpret_cast<void *>(action));
+  auto *label = lv_label_create(button);
+  lv_label_set_text(label, text);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_center(label);
+}
+
 void createUi() {
   auto *screen = lv_scr_act();
   lv_obj_set_style_bg_color(screen, lv_color_hex(0x0B0F11), 0);
@@ -619,18 +702,17 @@ void createUi() {
   networkLabel = lv_label_create(screen);
   lv_obj_set_style_text_font(networkLabel, &lv_font_montserrat_16, 0);
   lv_obj_set_pos(networkLabel, 18, 58);
-  heartbeatArc = lv_arc_create(screen);
-  lv_obj_set_size(heartbeatArc, 34, 34);
-  lv_obj_set_pos(heartbeatArc, 390, 48);
-  lv_arc_set_range(heartbeatArc, 0, 100);
-  lv_arc_set_value(heartbeatArc, 72);
-  lv_arc_set_bg_angles(heartbeatArc, 0, 360);
-  lv_obj_remove_style(heartbeatArc, nullptr, LV_PART_KNOB);
-  lv_obj_clear_flag(heartbeatArc, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_set_style_arc_width(heartbeatArc, 3, LV_PART_MAIN);
-  lv_obj_set_style_arc_color(heartbeatArc, lv_color_hex(0x263238), LV_PART_MAIN);
-  lv_obj_set_style_arc_width(heartbeatArc, 3, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_color(heartbeatArc, lv_color_hex(0x66D6B1), LV_PART_INDICATOR);
+  heartbeatDot = lv_obj_create(screen);
+  lv_obj_set_size(heartbeatDot, 10, 10);
+  lv_obj_set_pos(heartbeatDot, 382, 62);
+  lv_obj_set_style_radius(heartbeatDot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(heartbeatDot, 0, 0);
+  lv_obj_set_style_bg_color(heartbeatDot, lv_color_hex(0x66D6B1), 0);
+  lv_obj_clear_flag(heartbeatDot, LV_OBJ_FLAG_SCROLLABLE);
+  heartbeatLabel = lv_label_create(screen);
+  lv_label_set_text(heartbeatLabel, "NOW LIVE #0");
+  lv_obj_set_style_text_color(heartbeatLabel, lv_color_hex(0x92A0A5), 0);
+  lv_obj_set_pos(heartbeatLabel, 399, 57);
   linkLabel = lv_label_create(screen);
   lv_label_set_text(linkLabel, "BLE WAITING  |  NOW TX");
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(0x92A0A5), 0);
@@ -647,23 +729,33 @@ void createUi() {
   makeCard(screen, channels[2], 542, 108, 240);
   lv_obj_set_style_border_width(channels[2].button, 3, 0);
 
-  auto *role = lv_label_create(screen);
-  lv_label_set_text(role, "FAULT INJECTION CONTROL  |  PATH 3 OWNER  |  ESP-NOW LIVE");
-  lv_obj_set_style_text_font(role, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(role, lv_color_hex(0x6CC7E8), 0);
-  lv_obj_set_pos(role, 18, 190);
+  auto *tabs = lv_tabview_create(screen, LV_DIR_TOP, 34);
+  lv_obj_set_pos(tabs, 18, 188);
+  lv_obj_set_size(tabs, 764, 210);
+  lv_obj_set_style_bg_color(tabs, lv_color_hex(0x11181C), 0);
+  lv_obj_set_style_border_width(tabs, 0, 0);
+  auto *networkTab = lv_tabview_add_tab(tabs, "NETWORK");
+  auto *sensorTab = lv_tabview_add_tab(tabs, "SENSORS");
+  lv_obj_set_style_bg_color(networkTab, lv_color_hex(0x11181C), 0);
+  lv_obj_set_style_bg_color(sensorTab, lv_color_hex(0x11181C), 0);
+  lv_obj_set_style_pad_all(networkTab, 8, 0);
+  lv_obj_set_style_pad_all(sensorTab, 8, 0);
 
-  auto *hint = lv_label_create(screen);
-  lv_label_set_text(hint, "ESP-NOW synchronized  |  One action keeps the other two paths NORMAL");
-  lv_obj_set_style_text_color(hint, lv_color_hex(0x89959A), 0);
-  lv_obj_set_pos(hint, 19, 218);
-  makePathAction(screen, "PATH 1 LINK DOWN", 18, 246, 240, 1, 0x263942);
-  makePathAction(screen, "PATH 2 LINK DOWN", 280, 246, 240, 2, 0x263942);
-  makePathAction(screen, "PATH 3 LINK DOWN", 542, 246, 240, 3, 0xA66B17);
-  makePathAction(screen, "FRONT SWITCH A FAULT", 18, 316, 240, 4, 0x7E3030);
-  makePathAction(screen, "FRONT SWITCH B FAULT", 280, 316, 240, 5, 0x7E3030);
-  makePathAction(screen, "REAR SWITCH FAULT", 542, 316, 240, 6, 0x7E3030);
-  makePathAction(screen, "RECOVER ALL PATHS", 18, 390, 764, 7, 0x177C62);
+  makePathAction(networkTab, "PATH 1 LINK DOWN", 0, 4, 226, 1, 0x263942);
+  makePathAction(networkTab, "PATH 2 LINK DOWN", 244, 4, 226, 2, 0x263942);
+  makePathAction(networkTab, "PATH 3 LINK DOWN", 488, 4, 226, 3, 0xA66B17);
+  makePathAction(networkTab, "FRONT SWITCH A", 0, 66, 226, 4, 0x7E3030);
+  makePathAction(networkTab, "FRONT SWITCH B", 244, 66, 226, 5, 0x7E3030);
+  makePathAction(networkTab, "REAR SWITCH", 488, 66, 226, 6, 0x7E3030);
+
+  makeSensorAction(sensorTab, "LIDAR FRONT LEFT", 0, 4, 0, 0x315E87);
+  makeSensorAction(sensorTab, "LIDAR FRONT RIGHT", 244, 4, 1, 0x315E87);
+  makeSensorAction(sensorTab, "LIDAR REAR", 488, 4, 2, 0x315E87);
+  makeSensorAction(sensorTab, "CAMERA LOSS", 0, 66, 3, 0x6C4A7E);
+  makeSensorAction(sensorTab, "GNSS LOSS", 244, 66, 4, 0x6C4A7E);
+  makeSensorAction(sensorTab, "DUAL SENSOR", 488, 66, 5, 0x7E5A30);
+
+  makePathAction(screen, "RECOVER ALL", 18, 410, 764, 7, 0x177C62);
   refreshUi();
 }
 
@@ -715,6 +807,7 @@ void loop() {
     lvgl_port_lock(-1);
     refreshUi();
     lvgl_port_unlock();
+    publishBleState("path_ack", true);
   }
   if (ioNodeConnected != lastRenderedIoNodeConnected) {
     lastRenderedIoNodeConnected = ioNodeConnected;
@@ -725,10 +818,13 @@ void loop() {
     sendState(ioNodeConnected ? "io_node_connected" : "io_node_disconnected");
   }
   const uint32_t now = millis();
-  if (heartbeatArc != nullptr && now - lastArcAt >= 40) {
-    lastArcAt = now;
+  if (heartbeatDot != nullptr && now - lastPulseAt >= 250) {
+    lastPulseAt = now;
     lvgl_port_lock(-1);
-    lv_arc_set_rotation(heartbeatArc, (now / 12) % 360);
+    const bool bright = ((now / 250) % 2) == 0;
+    lv_obj_set_style_bg_color(heartbeatDot,
+                              lv_color_hex(bright ? 0x66D6B1 : 0x21443A), 0);
+    lv_label_set_text_fmt(heartbeatLabel, "NOW LIVE #%lu", espNowSequence);
     lvgl_port_unlock();
   }
   if (now - lastEspNowAt >= kEspNowPeriodMs) {

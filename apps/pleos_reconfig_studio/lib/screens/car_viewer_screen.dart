@@ -266,7 +266,8 @@ class _TopBar extends StatelessWidget {
               label: 'Path nodes',
               value: hardware.connected && hardware.pathNodes.isEmpty
                   ? 'ESP-NOW armed'
-                  : '${hardware.pathNodes.values.where((online) => online).length}/2 online',
+                  : 'P1 ${hardware.pathNodes['PLEOS-PATH1'] == true ? 'ACK' : '--'}  ·  '
+                        'P2 ${hardware.pathNodes['PLEOS-PATH2'] == true ? 'ACK' : '--'}',
               color: hardware.connected && hardware.pathNodes.isEmpty
                   ? const Color(0xFF0F766E)
                   : hardware.pathNodes.values
@@ -1036,13 +1037,18 @@ class _StatusPill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (activity) ...[
-            SizedBox(
-              width: 12,
-              height: 12,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
                 color: color,
-                backgroundColor: color.withValues(alpha: 0.16),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.28),
+                    blurRadius: 5,
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: 6),

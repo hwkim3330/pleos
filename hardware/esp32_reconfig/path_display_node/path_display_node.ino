@@ -26,8 +26,9 @@ constexpr int kRecoverButton = 35;
 // T-Display GPIO27 -> fault-injection PCB RELAY_EN (J3.3).
 // LOW keeps the NC Ethernet path closed; HIGH injects a link fault.
 constexpr int kRelayEnable = 27;
-constexpr uint32_t kCommandWatchdogMs = 1200;
+constexpr uint32_t kCommandWatchdogMs = 3000;
 constexpr uint32_t kHeartbeatMs = 1000;
+constexpr uint32_t kAckPeriodMs = 600 + (PLEOS_PATH_INDEX * 250);
 constexpr uint32_t kUiRefreshMs = 200;
 constexpr uint32_t kButtonDebounceMs = 40;
 constexpr uint32_t kInjectHoldMs = 600;
@@ -35,6 +36,8 @@ constexpr uint32_t kManualOverrideMs = 1200;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
 constexpr uint32_t kPathAckMagic = 0x5041434B;
+constexpr uint8_t kControllerMac[ESP_NOW_ETH_ALEN] =
+    {0xCC, 0xBA, 0x97, 0x15, 0xAD, 0x3C};
 constexpr const char *kPathNames[] = {"PATH 1", "PATH 2", "PATH 3"};
 constexpr const char *kChannelIds[] = {"tsn_front_a", "tsn_front_b", "tsn_rear"};
 constexpr const char *kNodeIds[] = {"PLEOS_PATH_1", "PLEOS_PATH_2", "PLEOS_PATH_3"};
@@ -48,6 +51,7 @@ bool isolated = false;
 bool controllerOnline = false;
 uint32_t lastCommandAt = 0;
 uint32_t lastHeartbeatAt = 0;
+uint32_t lastAckAt = 0;
 uint32_t lastUiAt = 0;
 uint32_t sequence = 0;
 bool injectButtonHigh = true;
@@ -258,6 +262,7 @@ void onEspNowReceive(const esp_now_recv_info_t *, const uint8_t *data, int lengt
 
 void startEspNow() {
   WiFi.mode(WIFI_STA);
+  esp_wifi_set_ps(WIFI_PS_NONE);
   esp_wifi_set_channel(kEspNowChannel, WIFI_SECOND_CHAN_NONE);
   if (esp_now_init() != ESP_OK) {
     Serial.println("!ESPNOW:INIT_FAILED");
@@ -265,10 +270,11 @@ void startEspNow() {
   }
   esp_now_register_recv_cb(onEspNowReceive);
   esp_now_peer_info_t peer{};
-  memset(peer.peer_addr, 0xFF, ESP_NOW_ETH_ALEN);
+  memcpy(peer.peer_addr, kControllerMac, ESP_NOW_ETH_ALEN);
   peer.channel = kEspNowChannel;
+  peer.ifidx = WIFI_IF_STA;
   peer.encrypt = false;
-  esp_now_add_peer(&peer);
+  if (esp_now_add_peer(&peer) != ESP_OK) Serial.println("!ESPNOW:PEER_FAILED");
 }
 
 void sendEspNowAck() {
@@ -277,8 +283,7 @@ void sendEspNowAck() {
                      static_cast<uint8_t>(isolated), 0};
   frame.crc = crc16(reinterpret_cast<const uint8_t *>(&frame),
                     sizeof(frame) - sizeof(frame.crc));
-  static const uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-  esp_now_send(broadcast, reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
+  esp_now_send(kControllerMac, reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
 }
 
 class PathServerCallbacks final : public BLEServerCallbacks {
@@ -434,10 +439,13 @@ void loop() {
     sendBleSnapshot("connected");
   }
   if (controllerOnline && millis() - lastCommandAt >= kCommandWatchdogMs) recoverSafe();
+  if (millis() - lastAckAt >= kAckPeriodMs) {
+    lastAckAt = millis();
+    sendEspNowAck();
+  }
   if (millis() - lastHeartbeatAt >= kHeartbeatMs) {
     lastHeartbeatAt = millis();
     Serial.printf("!NODE:%s:HEARTBEAT:%lu\n", kNodeIds[PLEOS_PATH_INDEX], ++sequence);
-    sendEspNowAck();
   }
   if (millis() - lastUiAt >= kUiRefreshMs) {
     lastUiAt = millis();

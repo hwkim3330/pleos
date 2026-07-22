@@ -150,6 +150,11 @@ class HardwareReconfigService {
     } else if (line.startsWith('!CHANNEL:')) {
       final fields = line.split(':');
       if (fields.length >= 3) _bleChannels[fields[1]] = fields[2];
+    } else if (line.startsWith('!PATHNODE:')) {
+      final fields = line.split(':');
+      if (fields.length >= 3) {
+        _blePathNodes['PLEOS-PATH${fields[1]}'] = fields[2] == 'ONLINE';
+      }
     } else if (line.startsWith('!EVENT:')) {
       emit = true;
     }
