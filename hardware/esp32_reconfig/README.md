@@ -2,16 +2,29 @@
 
 | Module | Role | Physical actuation |
 | --- | --- | --- |
-| `controller` | 7-inch touch supervisor, mode derivation and CBOR host link | No |
+| `controller` | 7-inch touch supervisor, BLE GATT and CBOR maintenance link | No |
 | `inline_injector` | Flash ESP-AB, ESP-AR and ESP-BR between each switch pair | Locked by default |
 | `io_node` | Expandable sensor switch inputs and relay outputs | Locked by default |
 | `bridge` | macOS serial-CBOR to WebSocket gateway | No |
 
 ```text
-PLEOS Reconfig Studio
-  <-> WebSocket <-> Mac bridge <-> framed CBOR <-> 7-inch supervisor
+PLEOS Reconfig Studio <-> BLE GATT <-> 7-inch supervisor
+  (maintenance fallback: WebSocket <-> Mac bridge <-> framed CBOR)
   <-> USB hub/CDC <-> ESP-AB/AR/BR <-> three normally-closed relay PCBs
 ```
+
+## BLE link
+
+The controller advertises as `PLEOS-RECONFIG` after every boot. The Android app scans and reconnects automatically; when BLE is unavailable (including most automotive emulators), it keeps using the macOS WebSocket bridge.
+
+| GATT item | UUID |
+| --- | --- |
+| Service | `7d2f0001-7c7a-4f7b-9b51-0af9a281d110` |
+| Notify/write control | `7d2f0002-7c7a-4f7b-9b51-0af9a281d110` |
+
+Commands are UTF-8 `!RECOVER`, `!SCENARIO:n`, or `!CHANNEL:id:health`. Notifications are short `!STATE`, `!CHANNEL`, and `!EVENT` records so they remain below the negotiated BLE MTU.
+
+The inline boards always boot into normally-closed bypass. An isolated relay is held only while the controller refreshes its command every second; loss of USB/controller communication triggers local recovery after five seconds. Fault state is deliberately not restored from flash after reboot.
 
 The ESP32 must never be wired directly into an automotive Ethernet differential pair. The inline injector controls a purpose-built isolated relay or Ethernet-switch test PCB. Loss of power, watchdog timeout, USB disconnect and firmware reset must all return the PCB to its normally-closed pass-through state.
 

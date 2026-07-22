@@ -6,6 +6,7 @@ namespace {
 // locked until the relay board, active level, watchdog and pin map are tested.
 constexpr bool kActuationEnabled = false;
 constexpr uint32_t kHeartbeatMs = 1000;
+constexpr uint32_t kCommandWatchdogMs = 5000;
 #ifndef PLEOS_LINK_INDEX
 #define PLEOS_LINK_INDEX 0
 #endif
@@ -25,6 +26,7 @@ Link channel{kLinkIds[PLEOS_LINK_INDEX], -1, -1, false};
 String input;
 uint32_t sequence;
 uint32_t lastHeartbeat;
+uint32_t lastCommandAt;
 
 void publish(const Link &link) {
   Serial.printf("!CHANNEL:%s:%s\n", link.id, link.isolated ? "ISOLATED" : "NORMAL");
@@ -43,6 +45,7 @@ void recover() {
 }
 
 void process(const String &command) {
+  lastCommandAt = millis();
   if (command == "!RECOVER") return recover();
   if (!command.startsWith("!CHANNEL:")) return;
   const int separator = command.indexOf(':', 9);
@@ -74,10 +77,12 @@ void setup() {
   if (kActuationEnabled && channel.relayPin >= 0) pinMode(channel.relayPin, OUTPUT);
   Serial.printf("!NODE:%s:READY\n", kNodeIds[PLEOS_LINK_INDEX]);
   recover();
+  lastCommandAt = millis();
 }
 
 void loop() {
   readCommands();
+  if (channel.isolated && millis() - lastCommandAt >= kCommandWatchdogMs) recover();
   if (millis() - lastHeartbeat >= kHeartbeatMs) {
     lastHeartbeat = millis();
     Serial.printf("!NODE:%s:HEARTBEAT:%lu\n", kNodeIds[PLEOS_LINK_INDEX], ++sequence);

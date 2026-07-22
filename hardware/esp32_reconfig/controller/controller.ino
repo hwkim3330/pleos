@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#include <BLE2902.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
 #include <EspUsbHost.h>
 #include <esp_display_panel.hpp>
 #include <lvgl.h>
@@ -12,6 +15,9 @@ namespace {
 constexpr uint8_t kProtocolVersion = 1;
 constexpr uint32_t kHeartbeatMs = 1000;
 constexpr bool kPhysicalOutputsEnabled = false;
+constexpr char kBleDeviceName[] = "PLEOS-RECONFIG";
+constexpr char kBleServiceUuid[] = "7d2f0001-7c7a-4f7b-9b51-0af9a281d110";
+constexpr char kBleControlUuid[] = "7d2f0002-7c7a-4f7b-9b51-0af9a281d110";
 
 enum class Health : uint8_t { healthy, degraded, failed, isolated };
 
@@ -50,6 +56,11 @@ EspUsbHost usbHost;
 EspUsbHostCdcSerial ioNodeSerial(usbHost);
 volatile bool ioNodeConnected = false;
 bool lastRenderedIoNodeConnected = false;
+BLECharacteristic *bleControl = nullptr;
+volatile bool bleConnected = false;
+volatile bool bleSnapshotPending = false;
+
+void publishBleState(const char *eventType, bool fullSnapshot);
 
 class BufferPrint final : public Print {
  public:
@@ -164,6 +175,7 @@ void sendState(const char *eventType, const char *channelId = "") {
   Serial.write(crc >> 8);
   Serial.write(crc & 0xFF);
   xSemaphoreGive(frameMutex);
+  publishBleState(eventType, strcmp(eventType, "heartbeat") != 0);
 }
 
 bool available(const char *id) {
@@ -195,8 +207,11 @@ void refreshUi() {
   lv_label_set_text_fmt(modeLabel, "AUTOWARE MODE  %s", effectiveMode);
   lv_obj_set_style_text_color(modeLabel, lv_color_hex(!strcmp(effectiveMode, "MRM") ? 0xFF6A61 : 0x66D6B1), 0);
   lv_label_set_text(eventLabel, lastEvent);
-  lv_label_set_text(linkLabel, ioNodeConnected ? "MAC LINK  READY   |   I/O NODE  ONLINE"
-                                               : "MAC LINK  READY   |   I/O NODE  OFFLINE");
+  lv_label_set_text(linkLabel, ioNodeConnected
+                                   ? (bleConnected ? "BLE APP  ONLINE   |   I/O NODE  ONLINE"
+                                                   : "BLE APP  WAITING  |   I/O NODE  ONLINE")
+                                   : (bleConnected ? "BLE APP  ONLINE   |   I/O NODE  OFFLINE"
+                                                   : "BLE APP  WAITING  |   I/O NODE  OFFLINE"));
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(ioNodeConnected ? 0x66D6B1 : 0x92A0A5), 0);
 }
 
@@ -297,6 +312,65 @@ void processCommand(const String &command, bool forwardToNode = true) {
       return;
     }
   }
+}
+
+void notifyBle(const String &message) {
+  if (!bleConnected || bleControl == nullptr) return;
+  bleControl->setValue(message.c_str());
+  bleControl->notify();
+  delay(4);
+}
+
+void publishBleState(const char *eventType, bool fullSnapshot) {
+  if (!bleConnected) return;
+  notifyBle(String("!STATE:") + sequenceNumber + ":" + effectiveMode + ":" +
+            (ioNodeConnected ? "ONLINE" : "OFFLINE"));
+  if (!fullSnapshot) return;
+  for (const auto &channel : channels) {
+    notifyBle(String("!CHANNEL:") + channel.id + ":" + healthName(channel.health));
+  }
+  notifyBle(String("!EVENT:") + eventType);
+}
+
+class ReconfigServerCallbacks final : public BLEServerCallbacks {
+  void onConnect(BLEServer *) override {
+    bleConnected = true;
+    bleSnapshotPending = true;
+  }
+
+  void onDisconnect(BLEServer *server) override {
+    bleConnected = false;
+    bleSnapshotPending = true;
+    server->startAdvertising();
+  }
+};
+
+class ReconfigControlCallbacks final : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *characteristic) override {
+    String command = characteristic->getValue();
+    command.trim();
+    if (command.startsWith("!")) processCommand(command);
+  }
+};
+
+void startBle() {
+  BLEDevice::init(kBleDeviceName);
+  BLEDevice::setMTU(185);
+  auto *server = BLEDevice::createServer();
+  server->setCallbacks(new ReconfigServerCallbacks());
+  auto *service = server->createService(kBleServiceUuid);
+  bleControl = service->createCharacteristic(
+      kBleControlUuid,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
+          BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_NOTIFY);
+  bleControl->setCallbacks(new ReconfigControlCallbacks());
+  bleControl->addDescriptor(new BLE2902());
+  bleControl->setValue("!BOOT:SAFE_BYPASS");
+  service->start();
+  auto *advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(kBleServiceUuid);
+  advertising->setScanResponse(true);
+  BLEDevice::startAdvertising();
 }
 
 void readIoNode() {
@@ -407,6 +481,7 @@ void setup() {
   usbHost.onDeviceDisconnected([](const EspUsbHostDeviceInfo &) { ioNodeConnected = false; });
   ioNodeSerial.begin(115200);
   usbHost.begin();
+  startBle();
   auto *board = new Board();
   board->init();
 #if LVGL_PORT_AVOID_TEARING_MODE
@@ -430,6 +505,13 @@ void setup() {
 void loop() {
   readCommands();
   readIoNode();
+  if (bleSnapshotPending) {
+    bleSnapshotPending = false;
+    lvgl_port_lock(-1);
+    refreshUi();
+    lvgl_port_unlock();
+    sendState(bleConnected ? "ble_connected" : "ble_disconnected");
+  }
   if (ioNodeConnected != lastRenderedIoNodeConnected) {
     lastRenderedIoNodeConnected = ioNodeConnected;
     lastEvent = ioNodeConnected ? "USB I/O node connected" : "USB I/O node disconnected";
@@ -441,6 +523,9 @@ void loop() {
   const uint32_t now = millis();
   if (now - lastHeartbeat >= kHeartbeatMs) {
     lastHeartbeat = now;
+    for (const auto &channel : channels) {
+      sendNodeCommand(String("!CHANNEL:") + channel.id + ":" + healthName(channel.health));
+    }
     sendState("heartbeat");
   }
   delay(10);
