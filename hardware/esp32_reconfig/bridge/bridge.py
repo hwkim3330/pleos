@@ -183,7 +183,7 @@ async def main() -> None:
                         )
                         command = f"!CHANNEL:{channel_id}:{desired}".encode()
                         await client.write_gatt_char(PATH_CONTROL, command, response=True)
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(0.25)
             except Exception as error:
                 latest["path_nodes"][name] = {
                     "connected": False,

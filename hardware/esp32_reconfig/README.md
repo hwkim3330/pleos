@@ -39,7 +39,10 @@ Use USB CBOR only for maintenance:
 
 Commands are UTF-8 `!SYNC`, `!RECOVER`, `!SCENARIO:n`, or `!CHANNEL:id:health`. The app sends `!SYNC` after subscribing so a reconnect always receives a complete snapshot. Notifications are short `!STATE`, `!CHANNEL`, and `!EVENT` records so they remain below the negotiated BLE MTU.
 
-The inline boards always boot into normally-closed bypass. An isolated relay is held only while the controller refreshes its command every second; loss of USB/controller communication triggers local recovery after five seconds. Fault state is deliberately not restored from flash after reboot.
+The inline boards always boot into normally-closed bypass. Path commands are
+refreshed every 250 ms; loss of controller communication triggers local
+recovery after 1.2 seconds. Fault state is deliberately not restored from
+flash after reboot.
 
 The ESP32 must never be wired directly into an automotive Ethernet differential pair. The inline injector controls a purpose-built isolated relay or Ethernet-switch test PCB. Loss of power, watchdog timeout, USB disconnect and firmware reset must all return the PCB to its normally-closed pass-through state.
 
@@ -74,7 +77,11 @@ The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first bo
   /dev/cu.usbserial-XXXXXXXX PATH2
 ```
 
-Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for five seconds.
+Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for 1.2 seconds. The display refreshes command age, BLE state, sequence and a live activity trace every 200 ms.
+
+The two side buttons provide a hardware demo path: button 1 (`GPIO0`) toggles
+fault injection and button 2 (`GPIO35`) recovers immediately. The third button
+is reset and intentionally remains a reset control.
 
 Each Path node drives its Fault Injection Module from `GPIO27` to
 `J3.3 / RELAY_EN`: LOW is normal NC pass-through and HIGH is an injected

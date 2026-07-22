@@ -78,7 +78,7 @@ pair. The ESP32 connects only to the isolated module control header.
    `RELAY_EN` at LOW and verify green on, red off, and Pair A continuity.
 3. Connect ESP32 GND and GPIO27. Issue an isolate command and verify 3.3 V at
    J3.3, relay operation, red on, green off, and Pair A open circuit.
-4. Stop the controller or BLE bridge. Within five seconds the firmware must
+4. Stop the controller or BLE bridge. Within 1.2 seconds the firmware must
    return GPIO27 LOW and restore continuity.
 5. Reset and power-cycle each ESP32. The module must remain in or return to
    NC pass-through before testing on an isolated Ethernet bench network.

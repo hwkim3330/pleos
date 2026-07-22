@@ -18,11 +18,15 @@ constexpr int kTftCs = 5;
 constexpr int kTftDc = 16;
 constexpr int kTftReset = 23;
 constexpr int kTftBacklight = 4;
+constexpr int kInjectButton = 0;
+constexpr int kRecoverButton = 35;
 // T-Display GPIO27 -> fault-injection PCB RELAY_EN (J3.3).
 // LOW keeps the NC Ethernet path closed; HIGH injects a link fault.
 constexpr int kRelayEnable = 27;
-constexpr uint32_t kCommandWatchdogMs = 5000;
+constexpr uint32_t kCommandWatchdogMs = 1200;
 constexpr uint32_t kHeartbeatMs = 1000;
+constexpr uint32_t kUiRefreshMs = 200;
+constexpr uint32_t kButtonDebounceMs = 40;
 constexpr const char *kPathNames[] = {"PATH 1", "PATH 2"};
 constexpr const char *kChannelIds[] = {"tsn_front_a", "tsn_front_b"};
 constexpr const char *kNodeIds[] = {"PLEOS_PATH_1", "PLEOS_PATH_2"};
@@ -36,7 +40,12 @@ bool isolated = false;
 bool controllerOnline = false;
 uint32_t lastCommandAt = 0;
 uint32_t lastHeartbeatAt = 0;
+uint32_t lastUiAt = 0;
 uint32_t sequence = 0;
+bool injectButtonHigh = true;
+bool recoverButtonHigh = true;
+uint32_t injectButtonChangedAt = 0;
+uint32_t recoverButtonChangedAt = 0;
 BLECharacteristic *bleControl = nullptr;
 volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
@@ -57,27 +66,58 @@ void sendBleSnapshot(const char *event) {
   notifyBle(String("!EVENT:") + event);
 }
 
-void drawStatus() {
-  const uint16_t accent = !controllerOnline ? ST77XX_ORANGE
-                           : isolated       ? ST77XX_RED
-                                            : ST77XX_GREEN;
-  display.fillScreen(ST77XX_BLACK);
-  display.fillRect(0, 0, 240, 7, accent);
-  display.setTextWrap(false);
-  display.setTextColor(ST77XX_WHITE);
-  display.setTextSize(3);
-  display.setCursor(14, 18);
-  display.print(kPathNames[PLEOS_PATH_INDEX]);
+uint16_t statusColor() {
+  return !controllerOnline ? ST77XX_ORANGE : isolated ? ST77XX_RED : ST77XX_GREEN;
+}
+
+void drawLiveMetrics() {
+  const uint16_t accent = statusColor();
+  display.fillRect(168, 12, 70, 14, ST77XX_BLACK);
+  display.setTextSize(1);
+  display.setTextColor(bleConnected ? ST77XX_CYAN : 0x7BEF);
+  display.setCursor(172, 18);
+  display.print(bleConnected ? "BLE LIVE" : "BLE WAIT");
+
+  display.fillRect(10, 39, 220, 27, ST77XX_BLACK);
   display.setTextSize(2);
   display.setTextColor(accent);
-  display.setCursor(14, 58);
+  display.setCursor(12, 43);
   display.print(!controllerOnline ? "WAITING" : isolated ? "ISOLATED" : "NORMAL");
+
+  display.fillRect(12, 70, 216, 7, ST77XX_BLACK);
+  const uint32_t age = controllerOnline ? min(millis() - lastCommandAt, kCommandWatchdogMs) :
+                                          kCommandWatchdogMs;
+  const int ageWidth = map(age, 0, kCommandWatchdogMs, 0, 216);
+  display.drawRect(12, 70, 216, 7, 0x4208);
+  display.fillRect(12, 70, ageWidth, 7, accent);
+
+  display.fillRect(12, 80, 216, 15, ST77XX_BLACK);
   display.setTextSize(1);
-  display.setTextColor(0xC618);
-  display.setCursor(14, 94);
-  display.print("NC BYPASS  |  WATCHDOG 5s");
-  display.setCursor(14, 111);
-  display.print(kNodeIds[PLEOS_PATH_INDEX]);
+  display.setTextColor(0xAD55);
+  display.setCursor(12, 82);
+  display.printf("CMD %4lums   SAFE 1.2s   #%lu", age, sequence);
+
+  display.fillRect(12, 97, 216, 12, ST77XX_BLACK);
+  display.drawFastHLine(12, 108, 216, 0x3186);
+  for (int x = 12; x < 228; x += 8) {
+    const int phase = (x / 8 + sequence) % 7;
+    const int height = phase == 0 ? 9 : phase == 1 ? 5 : 2;
+    display.drawFastVLine(x, 108 - height, height, accent);
+  }
+}
+
+void drawStatus() {
+  display.fillScreen(ST77XX_BLACK);
+  display.fillRect(0, 0, 240, 6, statusColor());
+  display.setTextWrap(false);
+  display.setTextColor(ST77XX_WHITE);
+  display.setTextSize(2);
+  display.setCursor(12, 15);
+  display.print(kPathNames[PLEOS_PATH_INDEX]);
+  display.setTextColor(0x7BEF);
+  display.setCursor(12, 119);
+  display.print("BTN1 INJECT     BTN2 RECOVER");
+  drawLiveMetrics();
 }
 
 void publish() {
@@ -171,6 +211,22 @@ void readCommands() {
   }
 }
 
+void pollButton(int pin, bool &wasHigh, uint32_t &changedAt, bool recover) {
+  const bool isHigh = digitalRead(pin) != LOW;
+  if (isHigh == wasHigh || millis() - changedAt < kButtonDebounceMs) return;
+  wasHigh = isHigh;
+  changedAt = millis();
+  if (isHigh) return;
+  lastCommandAt = millis();
+  if (recover) {
+    setIsolated(false);
+    sendBleSnapshot("manual_recover");
+  } else {
+    setIsolated(!isolated);
+    sendBleSnapshot(isolated ? "manual_inject" : "manual_normal");
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -178,6 +234,8 @@ void setup() {
   digitalWrite(kRelayEnable, LOW);
   pinMode(kRelayEnable, OUTPUT);
   digitalWrite(kRelayEnable, LOW);
+  pinMode(kInjectButton, INPUT_PULLUP);
+  pinMode(kRecoverButton, INPUT);
   Serial.begin(115200);
   pinMode(kTftBacklight, OUTPUT);
   digitalWrite(kTftBacklight, HIGH);
@@ -191,6 +249,8 @@ void setup() {
 
 void loop() {
   readCommands();
+  pollButton(kInjectButton, injectButtonHigh, injectButtonChangedAt, false);
+  pollButton(kRecoverButton, recoverButtonHigh, recoverButtonChangedAt, true);
   if (bleSnapshotPending) {
     bleSnapshotPending = false;
     sendBleSnapshot("connected");
@@ -199,6 +259,10 @@ void loop() {
   if (millis() - lastHeartbeatAt >= kHeartbeatMs) {
     lastHeartbeatAt = millis();
     Serial.printf("!NODE:%s:HEARTBEAT:%lu\n", kNodeIds[PLEOS_PATH_INDEX], ++sequence);
+  }
+  if (millis() - lastUiAt >= kUiRefreshMs) {
+    lastUiAt = millis();
+    drawLiveMetrics();
   }
   delay(5);
 }
