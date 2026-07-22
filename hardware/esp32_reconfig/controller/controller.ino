@@ -337,7 +337,10 @@ void refreshUi() {
   for (auto &channel : channels) {
     if (channel.value == nullptr || channel.button == nullptr) continue;
     lv_label_set_text(channel.value, healthName(channel.health));
-    lv_obj_set_style_bg_color(channel.button, lv_color_hex(0x182126), 0);
+    const bool faulted = channel.health != Health::healthy;
+    lv_obj_set_style_bg_color(channel.button,
+                              lv_color_hex(faulted ? 0x241719 : 0x151A1D), 0);
+    lv_obj_set_style_border_width(channel.button, faulted ? 2 : 1, 0);
     lv_obj_set_style_border_color(channel.button, lv_color_hex(healthColor(channel.health)), 0);
     lv_obj_set_style_text_color(channel.value, lv_color_hex(healthColor(channel.health)), 0);
   }
@@ -361,7 +364,10 @@ void refreshUi() {
                         bleConnected ? "ON" : "WAIT",
                         path1Online ? "ACK" : "--",
                         path2Online ? "ACK" : "--");
-  lv_obj_set_style_text_color(linkLabel, lv_color_hex(ioNodeConnected ? 0x66D6B1 : 0x92A0A5), 0);
+  const uint32_t linkColor = path1Online && path2Online ? 0x66D6B1 :
+                             (path1Online || path2Online ? 0xF0A83B : 0x687178);
+  lv_obj_set_style_text_color(linkLabel, lv_color_hex(linkColor), 0);
+  lv_obj_set_style_bg_color(heartbeatDot, lv_color_hex(linkColor), 0);
 }
 
 void sendNodeCommand(const String &command) {
@@ -749,7 +755,7 @@ void readCommands() {
 lv_obj_t *makeCard(lv_obj_t *parent, Channel &channel, int x, int y, int width) {
   auto *button = lv_btn_create(parent);
   lv_obj_set_pos(button, x, y);
-  lv_obj_set_size(button, width, 66);
+  lv_obj_set_size(button, width, 100);
   lv_obj_set_style_radius(button, 4, 0);
   lv_obj_set_style_shadow_width(button, 0, 0);
   lv_obj_set_style_bg_color(button, lv_color_hex(0x151A1D), 0);
@@ -759,14 +765,27 @@ lv_obj_t *makeCard(lv_obj_t *parent, Channel &channel, int x, int y, int width) 
   lv_obj_add_event_cb(button, channelPressed, LV_EVENT_CLICKED, &channel);
   auto *title = lv_label_create(button);
   lv_label_set_text(title, channel.label);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0xE8ECEE), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, -4, -4);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, -4, -2);
+  auto *route = lv_label_create(button);
+  const char *routeText = !strcmp(channel.id, "tsn_front_a") ? "FRONT A  /  REAR" :
+                          !strcmp(channel.id, "tsn_front_b") ? "FRONT B  /  REAR" :
+                                                               "FRONT A  /  FRONT B";
+  lv_label_set_text(route, routeText);
+  lv_obj_set_style_text_font(route, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(route, lv_color_hex(0x7F8B91), 0);
+  lv_obj_align(route, LV_ALIGN_LEFT_MID, -4, 2);
+  auto *transport = lv_label_create(button);
+  lv_label_set_text(transport, !strcmp(channel.id, "tsn_rear") ? "LOCAL" : "BLE");
+  lv_obj_set_style_text_font(transport, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(transport, lv_color_hex(0x66D6B1), 0);
+  lv_obj_align(transport, LV_ALIGN_TOP_RIGHT, 4, 3);
   channel.value = lv_label_create(button);
   lv_label_set_text(channel.value, "NORMAL");
   lv_obj_set_style_text_font(channel.value, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(channel.value, lv_color_hex(healthColor(channel.health)), 0);
-  lv_obj_align(channel.value, LV_ALIGN_BOTTOM_LEFT, -4, 4);
+  lv_obj_align(channel.value, LV_ALIGN_BOTTOM_LEFT, -4, 3);
   channel.button = button;
   return button;
 }
@@ -858,23 +877,23 @@ void createUi() {
   lv_obj_set_style_text_color(eventLabel, lv_color_hex(0x92A0A5), 0);
   lv_obj_align(eventLabel, LV_ALIGN_TOP_RIGHT, -18, 83);
 
-  channels[0].label = "PATH 1  A <-> REAR";
-  channels[1].label = "PATH 2  B <-> REAR";
-  channels[2].label = "PATH 3  A <-> B";
-  makeCard(screen, channels[0], 18, 108, 240);
-  makeCard(screen, channels[1], 280, 108, 240);
-  makeCard(screen, channels[2], 542, 108, 240);
-  lv_obj_set_style_border_width(channels[2].button, 3, 0);
+  channels[0].label = "PATH 1";
+  channels[1].label = "PATH 2";
+  channels[2].label = "PATH 3";
+  makeCard(screen, channels[0], 18, 105, 248);
+  makeCard(screen, channels[1], 276, 105, 248);
+  makeCard(screen, channels[2], 534, 105, 248);
 
   auto *tabs = lv_tabview_create(screen, LV_DIR_TOP, 34);
-  lv_obj_set_pos(tabs, 18, 188);
-  lv_obj_set_size(tabs, 764, 210);
+  lv_obj_set_pos(tabs, 18, 220);
+  lv_obj_set_size(tabs, 764, 170);
   lv_obj_set_style_bg_color(tabs, lv_color_hex(0x11181C), 0);
   lv_obj_set_style_border_width(tabs, 0, 0);
   auto *tabButtons = lv_tabview_get_tab_btns(tabs);
   lv_obj_set_style_bg_color(tabButtons, lv_color_hex(0x0B0F11), 0);
   lv_obj_set_style_text_color(tabButtons, lv_color_hex(0x7F8B91), 0);
   lv_obj_set_style_text_color(tabButtons, lv_color_hex(0xF4F7F7), LV_STATE_CHECKED);
+  lv_obj_set_style_bg_color(tabButtons, lv_color_hex(0x151A1D), LV_STATE_CHECKED);
   lv_obj_set_style_border_width(tabButtons, 0, 0);
   auto *networkTab = lv_tabview_add_tab(tabs, "NETWORK");
   auto *sensorTab = lv_tabview_add_tab(tabs, "SENSORS");
@@ -883,9 +902,9 @@ void createUi() {
   lv_obj_set_style_pad_all(networkTab, 8, 0);
   lv_obj_set_style_pad_all(sensorTab, 8, 0);
 
-  makePathAction(networkTab, "FRONT SWITCH A", 0, 26, 226, 4, 0xE56C65);
-  makePathAction(networkTab, "FRONT SWITCH B", 244, 26, 226, 5, 0xE56C65);
-  makePathAction(networkTab, "REAR SWITCH", 488, 26, 226, 6, 0xE56C65);
+  makePathAction(networkTab, "FRONT SWITCH A", 0, 10, 226, 4, 0xE56C65);
+  makePathAction(networkTab, "FRONT SWITCH B", 244, 10, 226, 5, 0xE56C65);
+  makePathAction(networkTab, "REAR SWITCH", 488, 10, 226, 6, 0xE56C65);
 
   makeSensorAction(sensorTab, "LIDAR FRONT LEFT", 0, 4, 0, 0x315E87);
   makeSensorAction(sensorTab, "LIDAR FRONT RIGHT", 244, 4, 1, 0x315E87);
@@ -894,7 +913,7 @@ void createUi() {
   makeSensorAction(sensorTab, "GNSS LOSS", 244, 66, 4, 0x6C4A7E);
   makeSensorAction(sensorTab, "DUAL SENSOR", 488, 66, 5, 0x7E5A30);
 
-  makePathAction(screen, "RECOVER ALL", 18, 400, 764, 7, 0x66D6B1);
+  makePathAction(screen, "RECOVER ALL", 18, 398, 764, 7, 0x66D6B1);
   refreshUi();
 }
 
@@ -960,7 +979,6 @@ void loop() {
   if (heartbeatDot != nullptr && now - lastPulseAt >= 500) {
     lastPulseAt = now;
     lvgl_port_lock(-1);
-    lv_obj_set_style_bg_color(heartbeatDot, lv_color_hex(0x66D6B1), 0);
     lv_label_set_text(heartbeatLabel, "PATH BLE");
     lvgl_port_unlock();
   }
