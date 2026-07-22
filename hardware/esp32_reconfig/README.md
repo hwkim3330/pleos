@@ -8,14 +8,28 @@
 | `bridge` | macOS serial-CBOR to WebSocket gateway | No |
 
 ```text
-PLEOS Reconfig Studio <-> BLE GATT <-> 7-inch supervisor
-  (maintenance fallback: WebSocket <-> Mac bridge <-> framed CBOR)
+PLEOS Reconfig Studio <-> WebSocket <-> Mac BLE bridge
+  <-> BLE GATT <-> 7-inch supervisor
+  (maintenance fallback: Mac bridge <-> USB framed CBOR)
   <-> USB hub/CDC <-> ESP-AB/AR/BR <-> three normally-closed relay PCBs
 ```
 
 ## BLE link
 
-The controller advertises as `PLEOS-RECONFIG` after every boot. The Android app scans and reconnects automatically; when BLE is unavailable (including most automotive emulators), it keeps using the macOS WebSocket bridge.
+The controller advertises as `PLEOS-RECONFIG` after every boot. The Mac bridge scans and reconnects automatically, then exposes the existing `ws://10.0.2.2:8766` endpoint to PLEOS Connect. This is the default because the automotive emulator does not reliably own the Mac Bluetooth adapter. Direct Android BLE remains available in the app service as an opt-in path for a standalone physical tablet.
+
+Start the normal PLEOS Connect path from the repository root:
+
+```bash
+./hardware/esp32_reconfig/bridge/run.sh
+```
+
+Use USB CBOR only for maintenance:
+
+```bash
+./hardware/esp32_reconfig/bridge/run.sh \
+  --transport serial --serial /dev/cu.usbmodem59580282341
+```
 
 | GATT item | UUID |
 | --- | --- |

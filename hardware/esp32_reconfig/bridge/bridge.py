@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Bridge framed CBOR from the ESP controller to Android emulator WebSocket clients."""
+"""Bridge the ESP controller to PLEOS Connect WebSocket clients."""
 
 import argparse
 import asyncio
 import json
-from pathlib import Path
 
 import cbor2
 import serial
+from bleak import BleakClient, BleakScanner
 from serial.tools import list_ports
 import websockets
 
 MAGIC = b"\xa5\x5a"
+BLE_SERVICE = "7d2f0001-7c7a-4f7b-9b51-0af9a281d110"
+BLE_CONTROL = "7d2f0002-7c7a-4f7b-9b51-0af9a281d110"
+CHANNEL_COUNT = 9
 
 
 def crc16(data: bytes) -> int:
@@ -26,42 +29,69 @@ def crc16(data: bytes) -> int:
 def find_port(requested: str | None) -> str:
     if requested:
         return requested
-    candidates = [p.device for p in list_ports.comports() if "usbmodem" in p.device or "wch" in p.description.lower()]
+    candidates = [
+        port.device
+        for port in list_ports.comports()
+        if "usbmodem" in port.device or "wch" in port.description.lower()
+    ]
     if not candidates:
         raise RuntimeError("ESP serial port not found. Pass --serial /dev/cu.usbmodem...")
     return candidates[0]
 
 
+def wire_command(command: dict) -> str:
+    if command.get("command") == "scenario":
+        return f"!SCENARIO:{command['id']}"
+    if command.get("command") == "channel":
+        return f"!CHANNEL:{command['id']}:{command['health']}"
+    if command.get("command") == "recover":
+        return "!RECOVER"
+    raise ValueError("unknown_command")
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--transport", choices=("ble", "serial"), default="ble")
+    parser.add_argument("--ble-name", default="PLEOS-RECONFIG")
     parser.add_argument("--serial")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()
-    port = find_port(args.serial)
-    stream = serial.Serial(port, args.baud, timeout=0.05)
+
     clients: set = set()
-    buffer = bytearray()
+    commands: asyncio.Queue[str] = asyncio.Queue()
+    latest = {
+        "v": 1,
+        "seq": 0,
+        "board": "ws-esp32s3-touch-lcd-7",
+        "event": "waiting_for_controller",
+        "mode": "OFFLINE",
+        "io_node_connected": False,
+        "channels": {},
+    }
+
+    async def broadcast() -> None:
+        encoded = json.dumps(latest, separators=(",", ":"))
+        stale = []
+        for socket in list(clients):
+            try:
+                await socket.send(encoded)
+            except websockets.ConnectionClosed:
+                stale.append(socket)
+        for socket in stale:
+            clients.discard(socket)
 
     async def handler(socket):
         clients.add(socket)
         print(f"[bridge] app connected ({len(clients)})")
+        if latest["seq"]:
+            await socket.send(json.dumps(latest, separators=(",", ":")))
         try:
             async for raw in socket:
                 try:
                     command = json.loads(raw)
-                    if command.get("command") == "scenario":
-                        stream.write(f"!SCENARIO:{command['id']}\n".encode())
-                    elif command.get("command") == "channel":
-                        stream.write(
-                            f"!CHANNEL:{command['id']}:{command['health']}\n".encode()
-                        )
-                    elif command.get("command") == "recover":
-                        stream.write(b"!RECOVER\n")
-                    else:
-                        await socket.send(json.dumps({"error": "unknown_command"}))
-                        continue
+                    await commands.put(wire_command(command))
                     print(f"[app] {command}")
                 except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                     await socket.send(json.dumps({"error": str(error)}))
@@ -71,50 +101,83 @@ async def main() -> None:
             clients.discard(socket)
             print(f"[bridge] app disconnected ({len(clients)})")
 
-    async with websockets.serve(handler, args.host, args.port):
-        print(f"[bridge] {port} -> ws://{args.host}:{args.port}")
+    async def run_ble() -> None:
         while True:
-            waiting = stream.in_waiting
-            if waiting:
-                buffer.extend(stream.read(waiting))
-            while True:
-                marker = buffer.find(MAGIC)
-                if marker < 0:
-                    buffer[:] = buffer[-1:]
-                    break
-                if marker:
-                    del buffer[:marker]
-                if len(buffer) < 6:
-                    break
+            try:
+                print(f"[ble] scanning for {args.ble_name}")
+                device = await BleakScanner.find_device_by_name(args.ble_name, timeout=8)
+                if device is None:
+                    await asyncio.sleep(2)
+                    continue
+                async with BleakClient(device) as client:
+                    print(f"[ble] connected: {args.ble_name}")
+
+                    async def on_notify(_, payload: bytearray) -> None:
+                        line = payload.decode(errors="replace").strip()
+                        fields = line.split(":")
+                        if line.startswith("!STATE:") and len(fields) >= 4:
+                            latest["seq"] = int(fields[1])
+                            latest["mode"] = fields[2]
+                            latest["io_node_connected"] = fields[3] == "ONLINE"
+                            latest["event"] = "heartbeat"
+                            if len(latest["channels"]) == CHANNEL_COUNT:
+                                await broadcast()
+                        elif line.startswith("!CHANNEL:") and len(fields) >= 3:
+                            latest["channels"][fields[1]] = fields[2]
+                        elif line.startswith("!EVENT:"):
+                            latest["event"] = line[7:]
+                            await broadcast()
+
+                    await client.start_notify(BLE_CONTROL, on_notify)
+                    await client.write_gatt_char(BLE_CONTROL, b"!SYNC", response=True)
+                    while client.is_connected:
+                        try:
+                            command = await asyncio.wait_for(commands.get(), timeout=1)
+                            await client.write_gatt_char(
+                                BLE_CONTROL, command.encode(), response=True
+                            )
+                        except asyncio.TimeoutError:
+                            pass
+            except Exception as error:
+                latest["event"] = "ble_disconnected"
+                latest["mode"] = "OFFLINE"
+                print(f"[ble] reconnecting after error: {error}")
+                await broadcast()
+                await asyncio.sleep(2)
+
+    async def run_serial() -> None:
+        port = find_port(args.serial)
+        stream = serial.Serial(port, args.baud, timeout=0.05)
+        buffer = bytearray()
+        print(f"[serial] connected: {port}")
+        while True:
+            while not commands.empty():
+                stream.write((await commands.get() + "\n").encode())
+            if stream.in_waiting:
+                buffer.extend(stream.read(stream.in_waiting))
+            marker = buffer.find(MAGIC)
+            if marker < 0:
+                buffer[:] = buffer[-1:]
+            elif marker:
+                del buffer[:marker]
+            elif len(buffer) >= 6:
                 size = int.from_bytes(buffer[2:4], "big")
                 frame_size = 4 + size + 2
                 if size > 4096:
                     del buffer[:2]
-                    continue
-                if len(buffer) < frame_size:
-                    break
-                payload = bytes(buffer[4 : 4 + size])
-                expected = int.from_bytes(buffer[4 + size : frame_size], "big")
-                del buffer[:frame_size]
-                if crc16(payload) != expected:
-                    print("[bridge] dropped frame with bad CRC")
-                    continue
-                message = cbor2.loads(payload)
-                encoded = json.dumps(message, separators=(",", ":"))
-                if message.get("event") != "heartbeat":
-                    print(
-                        f"[esp] {message.get('event')} "
-                        f"mode={message.get('mode')} seq={message.get('seq')}"
-                    )
-                stale = []
-                for socket in list(clients):
-                    try:
-                        await socket.send(encoded)
-                    except websockets.ConnectionClosed:
-                        stale.append(socket)
-                for socket in stale:
-                    clients.discard(socket)
+                elif len(buffer) >= frame_size:
+                    payload = bytes(buffer[4 : 4 + size])
+                    expected = int.from_bytes(buffer[4 + size : frame_size], "big")
+                    del buffer[:frame_size]
+                    if crc16(payload) == expected:
+                        latest.update(cbor2.loads(payload))
+                        await broadcast()
             await asyncio.sleep(0.01)
+
+    transport = run_ble if args.transport == "ble" else run_serial
+    async with websockets.serve(handler, args.host, args.port):
+        print(f"[bridge] {args.transport} -> ws://{args.host}:{args.port}")
+        await transport()
 
 
 if __name__ == "__main__":

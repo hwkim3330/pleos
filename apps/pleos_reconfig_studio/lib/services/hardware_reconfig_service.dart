@@ -23,9 +23,13 @@ class HardwareReconfigState {
 }
 
 class HardwareReconfigService {
-  HardwareReconfigService({this.url = 'ws://10.0.2.2:8766'});
+  HardwareReconfigService({
+    this.url = 'ws://10.0.2.2:8766',
+    this.directBle = false,
+  });
 
   final String url;
+  final bool directBle;
   final _states = StreamController<HardwareReconfigState>.broadcast();
   WebSocket? _socket;
   BluetoothDevice? _bleDevice;
@@ -53,7 +57,7 @@ class HardwareReconfigService {
 
   void connect() {
     _open();
-    _startBleScan();
+    if (directBle) _startBleScan();
   }
 
   Future<void> _startBleScan() async {
@@ -239,7 +243,7 @@ class HardwareReconfigService {
     _disposed = true;
     _retry?.cancel();
     _bleRetry?.cancel();
-    await FlutterBluePlus.stopScan();
+    if (directBle) await FlutterBluePlus.stopScan();
     await _scanSubscription?.cancel();
     await _connectionSubscription?.cancel();
     await _valueSubscription?.cancel();
