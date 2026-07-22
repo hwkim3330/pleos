@@ -32,7 +32,8 @@ constexpr uint8_t kPathNodeMacs[][ESP_NOW_ETH_ALEN] = {
     {0xA8, 0x42, 0xE3, 0x3D, 0x70, 0xF8},  // Path 1
     {0xA8, 0x42, 0xE3, 0x3D, 0x84, 0xD8},  // Path 2
 };
-constexpr bool kPhysicalOutputsEnabled = false;
+constexpr bool kPhysicalOutputsEnabled = true;
+constexpr int kPath3RelayEnable = 6;
 constexpr char kBleDeviceName[] = "PLEOS-RECONFIG";
 constexpr char kBleServiceUuid[] = "7d2f0001-7c7a-4f7b-9b51-0af9a281d110";
 constexpr char kBleControlUuid[] = "7d2f0002-7c7a-4f7b-9b51-0af9a281d110";
@@ -66,6 +67,9 @@ lv_obj_t *linkLabel;
 lv_obj_t *eventLabel;
 lv_obj_t *heartbeatDot;
 lv_obj_t *heartbeatLabel;
+lv_obj_t *pathLines[3][2]{};
+lv_obj_t *switchNodes[3]{};
+lv_obj_t *sensorOverlay;
 uint32_t sequenceNumber = 0;
 uint32_t lastHeartbeat = 0;
 const char *effectiveMode = "TRIPLE";
@@ -333,6 +337,8 @@ void deriveMode() {
 }
 
 void refreshUi() {
+  digitalWrite(kPath3RelayEnable,
+               channels[2].health == Health::healthy ? LOW : HIGH);
   deriveMode();
   for (auto &channel : channels) {
     if (channel.value == nullptr || channel.button == nullptr) continue;
@@ -343,6 +349,24 @@ void refreshUi() {
     lv_obj_set_style_border_width(channel.button, faulted ? 2 : 1, 0);
     lv_obj_set_style_border_color(channel.button, lv_color_hex(healthColor(channel.health)), 0);
     lv_obj_set_style_text_color(channel.value, lv_color_hex(healthColor(channel.health)), 0);
+  }
+  for (int index = 0; index < 3; ++index) {
+    const uint32_t color = healthColor(channels[index].health);
+    for (auto *line : pathLines[index]) {
+      if (line != nullptr) lv_obj_set_style_line_color(line, lv_color_hex(color), 0);
+    }
+  }
+  const bool switchFaults[] = {
+      channels[0].health != Health::healthy && channels[2].health != Health::healthy,
+      channels[1].health != Health::healthy && channels[2].health != Health::healthy,
+      channels[0].health != Health::healthy && channels[1].health != Health::healthy,
+  };
+  for (int index = 0; index < 3; ++index) {
+    if (switchNodes[index] == nullptr) continue;
+    lv_obj_set_style_bg_color(switchNodes[index],
+                              lv_color_hex(switchFaults[index] ? 0x2A1719 : 0x171D20), 0);
+    lv_obj_set_style_border_color(switchNodes[index],
+                                  lv_color_hex(switchFaults[index] ? 0xE56C65 : 0x39454A), 0);
   }
   lv_label_set_text_fmt(modeLabel, "AUTOWARE MODE  %s", effectiveMode);
   lv_obj_set_style_text_color(modeLabel, lv_color_hex(!strcmp(effectiveMode, "MRM") ? 0xFF6A61 : 0x66D6B1), 0);
@@ -697,6 +721,7 @@ void pathBleConnectionTask(void *) {
         }
       }
       scan->clearResults();
+      if (!bleConnected) BLEDevice::startAdvertising();
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
@@ -843,15 +868,113 @@ void makeSensorAction(lv_obj_t *parent, const char *text, int x, int y,
   lv_obj_center(label);
 }
 
+void makeTopologyLine(lv_obj_t *parent, int pathIndex, const lv_point_t *points,
+                      uint16_t pointCount) {
+  auto *shadow = lv_line_create(parent);
+  lv_line_set_points(shadow, points, pointCount);
+  lv_obj_set_style_line_width(shadow, 8, 0);
+  lv_obj_set_style_line_color(shadow, lv_color_hex(0x0A0D0F), 0);
+  lv_obj_set_style_line_rounded(shadow, true, 0);
+  pathLines[pathIndex][0] = lv_line_create(parent);
+  lv_line_set_points(pathLines[pathIndex][0], points, pointCount);
+  lv_obj_set_style_line_width(pathLines[pathIndex][0], 3, 0);
+  lv_obj_set_style_line_color(pathLines[pathIndex][0],
+                              lv_color_hex(healthColor(channels[pathIndex].health)), 0);
+  lv_obj_set_style_line_rounded(pathLines[pathIndex][0], true, 0);
+}
+
+void makePathPill(lv_obj_t *parent, int index, int x, int y) {
+  auto *button = lv_btn_create(parent);
+  lv_obj_set_pos(button, x, y);
+  lv_obj_set_size(button, 104, 46);
+  lv_obj_set_style_radius(button, 4, 0);
+  lv_obj_set_style_shadow_width(button, 0, 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x151A1D), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x242D31), LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(button, 1, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(healthColor(channels[index].health)), 0);
+  lv_obj_add_event_cb(button, channelPressed, LV_EVENT_CLICKED, &channels[index]);
+  auto *title = lv_label_create(button);
+  lv_label_set_text_fmt(title, "PATH %d", index + 1);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xF4F7F7), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, -4, -5);
+  channels[index].value = lv_label_create(button);
+  lv_label_set_text(channels[index].value, "NORMAL");
+  lv_obj_set_style_text_font(channels[index].value, &lv_font_montserrat_12, 0);
+  lv_obj_align(channels[index].value, LV_ALIGN_BOTTOM_LEFT, -4, 5);
+  channels[index].button = button;
+}
+
+void makeSwitchNode(lv_obj_t *parent, int index, const char *titleText,
+                    const char *subtitle, int x, int y, intptr_t action) {
+  auto *button = lv_btn_create(parent);
+  lv_obj_set_pos(button, x, y);
+  lv_obj_set_size(button, 184, 70);
+  lv_obj_set_style_radius(button, 4, 0);
+  lv_obj_set_style_shadow_width(button, 0, 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x171D20), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x242D31), LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(button, 1, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(0x39454A), 0);
+  lv_obj_add_event_cb(button, pathActionPressed, LV_EVENT_CLICKED,
+                      reinterpret_cast<void *>(action));
+  auto *title = lv_label_create(button);
+  lv_label_set_text(title, titleText);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xF4F7F7), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, -4, -3);
+  auto *detail = lv_label_create(button);
+  lv_label_set_text(detail, subtitle);
+  lv_obj_set_style_text_font(detail, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(detail, lv_color_hex(0x7F8B91), 0);
+  lv_obj_align(detail, LV_ALIGN_BOTTOM_LEFT, -4, 3);
+  switchNodes[index] = button;
+}
+
+void toggleSensorOverlay(lv_event_t *) {
+  if (sensorOverlay == nullptr) return;
+  if (lv_obj_has_flag(sensorOverlay, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_clear_flag(sensorOverlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(sensorOverlay);
+  } else {
+    lv_obj_add_flag(sensorOverlay, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+lv_obj_t *makeModeButton(lv_obj_t *parent, const char *text, int x, int y) {
+  auto *button = lv_btn_create(parent);
+  lv_obj_set_pos(button, x, y);
+  lv_obj_set_size(button, 128, 30);
+  lv_obj_set_style_radius(button, 4, 0);
+  lv_obj_set_style_shadow_width(button, 0, 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x171D20), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x242D31), LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(button, 1, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(0x39454A), 0);
+  lv_obj_add_event_cb(button, toggleSensorOverlay, LV_EVENT_CLICKED, nullptr);
+  auto *label = lv_label_create(button);
+  lv_label_set_text(label, text);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(label, lv_color_hex(0xC8D0D3), 0);
+  lv_obj_center(label);
+  return button;
+}
+
 void createUi() {
   auto *screen = lv_scr_act();
   lv_obj_set_style_bg_color(screen, lv_color_hex(0x0B0F11), 0);
   lv_obj_set_style_text_color(screen, lv_color_hex(0xF4F7F7), 0);
 
+  auto *keti = lv_label_create(screen);
+  lv_label_set_text(keti, "KETI");
+  lv_obj_set_style_text_font(keti, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(keti, lv_color_hex(0x4DA3FF), 0);
+  lv_obj_set_pos(keti, 18, 20);
   auto *title = lv_label_create(screen);
   lv_label_set_text(title, "PLEOS RECONFIG");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
-  lv_obj_set_pos(title, 18, 15);
+  lv_obj_set_pos(title, 76, 15);
   modeLabel = lv_label_create(screen);
   lv_obj_set_style_text_font(modeLabel, &lv_font_montserrat_16, 0);
   lv_obj_align(modeLabel, LV_ALIGN_TOP_RIGHT, -18, 19);
@@ -877,49 +1000,61 @@ void createUi() {
   lv_obj_set_style_text_color(eventLabel, lv_color_hex(0x92A0A5), 0);
   lv_obj_align(eventLabel, LV_ALIGN_TOP_RIGHT, -18, 83);
 
-  channels[0].label = "PATH 1";
-  channels[1].label = "PATH 2";
-  channels[2].label = "PATH 3";
-  makeCard(screen, channels[0], 18, 105, 248);
-  makeCard(screen, channels[1], 276, 105, 248);
-  makeCard(screen, channels[2], 534, 105, 248);
+  static const lv_point_t path1Points[] = {{202, 183}, {354, 292}};
+  static const lv_point_t path2Points[] = {{598, 183}, {446, 292}};
+  static const lv_point_t path3Points[] = {{264, 148}, {536, 148}};
+  makeTopologyLine(screen, 0, path1Points, 2);
+  makeTopologyLine(screen, 1, path2Points, 2);
+  makeTopologyLine(screen, 2, path3Points, 2);
 
-  auto *tabs = lv_tabview_create(screen, LV_DIR_TOP, 34);
-  lv_obj_set_pos(tabs, 18, 220);
-  lv_obj_set_size(tabs, 764, 170);
-  lv_obj_set_style_bg_color(tabs, lv_color_hex(0x11181C), 0);
-  lv_obj_set_style_border_width(tabs, 0, 0);
-  auto *tabButtons = lv_tabview_get_tab_btns(tabs);
-  lv_obj_set_style_bg_color(tabButtons, lv_color_hex(0x0B0F11), 0);
-  lv_obj_set_style_text_color(tabButtons, lv_color_hex(0x7F8B91), 0);
-  lv_obj_set_style_text_color(tabButtons, lv_color_hex(0xF4F7F7), LV_STATE_CHECKED);
-  lv_obj_set_style_bg_color(tabButtons, lv_color_hex(0x151A1D), LV_STATE_CHECKED);
-  lv_obj_set_style_border_width(tabButtons, 0, 0);
-  auto *networkTab = lv_tabview_add_tab(tabs, "NETWORK");
-  auto *sensorTab = lv_tabview_add_tab(tabs, "SENSORS");
-  lv_obj_set_style_bg_color(networkTab, lv_color_hex(0x11181C), 0);
-  lv_obj_set_style_bg_color(sensorTab, lv_color_hex(0x11181C), 0);
-  lv_obj_set_style_pad_all(networkTab, 8, 0);
-  lv_obj_set_style_pad_all(sensorTab, 8, 0);
+  makeSwitchNode(screen, 0, "FRONT SWITCH A", "TSN ZONE A", 80, 113, 4);
+  makeSwitchNode(screen, 1, "FRONT SWITCH B", "TSN ZONE B", 536, 113, 5);
+  makeSwitchNode(screen, 2, "REAR SWITCH", "TSN REAR ZONE", 308, 292, 6);
 
-  makePathAction(networkTab, "FRONT SWITCH A", 0, 10, 226, 4, 0xE56C65);
-  makePathAction(networkTab, "FRONT SWITCH B", 244, 10, 226, 5, 0xE56C65);
-  makePathAction(networkTab, "REAR SWITCH", 488, 10, 226, 6, 0xE56C65);
+  makePathPill(screen, 0, 218, 215);
+  makePathPill(screen, 1, 478, 215);
+  makePathPill(screen, 2, 348, 125);
 
-  makeSensorAction(sensorTab, "LIDAR FRONT LEFT", 0, 4, 0, 0x315E87);
-  makeSensorAction(sensorTab, "LIDAR FRONT RIGHT", 244, 4, 1, 0x315E87);
-  makeSensorAction(sensorTab, "LIDAR REAR", 488, 4, 2, 0x315E87);
-  makeSensorAction(sensorTab, "CAMERA LOSS", 0, 66, 3, 0x6C4A7E);
-  makeSensorAction(sensorTab, "GNSS LOSS", 244, 66, 4, 0x6C4A7E);
-  makeSensorAction(sensorTab, "DUAL SENSOR", 488, 66, 5, 0x7E5A30);
+  auto *topologyLabel = lv_label_create(screen);
+  lv_label_set_text(topologyLabel, "BLE VERIFIED VEHICLE NETWORK");
+  lv_obj_set_style_text_font(topologyLabel, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(topologyLabel, lv_color_hex(0x687178), 0);
+  lv_obj_set_pos(topologyLabel, 18, 370);
+  makeModeButton(screen, "SENSORS", 654, 359);
 
-  makePathAction(screen, "RECOVER ALL", 18, 398, 764, 7, 0x66D6B1);
+  sensorOverlay = lv_obj_create(screen);
+  lv_obj_set_pos(sensorOverlay, 18, 101);
+  lv_obj_set_size(sensorOverlay, 764, 286);
+  lv_obj_set_style_radius(sensorOverlay, 4, 0);
+  lv_obj_set_style_bg_color(sensorOverlay, lv_color_hex(0x101619), 0);
+  lv_obj_set_style_border_width(sensorOverlay, 1, 0);
+  lv_obj_set_style_border_color(sensorOverlay, lv_color_hex(0x2D383D), 0);
+  lv_obj_set_style_pad_all(sensorOverlay, 12, 0);
+  lv_obj_clear_flag(sensorOverlay, LV_OBJ_FLAG_SCROLLABLE);
+  auto *sensorTitle = lv_label_create(sensorOverlay);
+  lv_label_set_text(sensorTitle, "SENSOR CONTROL");
+  lv_obj_set_style_text_font(sensorTitle, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(sensorTitle, lv_color_hex(0xF4F7F7), 0);
+  lv_obj_set_pos(sensorTitle, 4, 0);
+  makeModeButton(sensorOverlay, "NETWORK", 596, -4);
+  makeSensorAction(sensorOverlay, "LIDAR FRONT LEFT", 0, 42, 0, 0x68A8D8);
+  makeSensorAction(sensorOverlay, "LIDAR FRONT RIGHT", 244, 42, 1, 0x68A8D8);
+  makeSensorAction(sensorOverlay, "LIDAR REAR", 488, 42, 2, 0x68A8D8);
+  makeSensorAction(sensorOverlay, "CAMERA LOSS", 0, 108, 3, 0xC391D4);
+  makeSensorAction(sensorOverlay, "GNSS LOSS", 244, 108, 4, 0xC391D4);
+  makeSensorAction(sensorOverlay, "DUAL SENSOR", 488, 108, 5, 0xE0A65A);
+  lv_obj_add_flag(sensorOverlay, LV_OBJ_FLAG_HIDDEN);
+
+  makePathAction(screen, "RECOVER ALL", 18, 394, 764, 7, 0x66D6B1);
   refreshUi();
 }
 
 }  // namespace
 
 void setup() {
+  digitalWrite(kPath3RelayEnable, LOW);
+  pinMode(kPath3RelayEnable, OUTPUT);
+  digitalWrite(kPath3RelayEnable, LOW);
   Serial.begin(115200);
   delay(300);
   frameMutex = xSemaphoreCreateMutex();

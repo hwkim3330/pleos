@@ -244,9 +244,9 @@ class _TopBar extends StatelessWidget {
             ),
             const SizedBox(width: 14),
             _StatusPill(
-              label: 'Path 3 module',
+              label: '7-inch gateway',
               value: hardware.connected
-                  ? '7-inch ESP #${hardware.sequence}'
+                  ? 'BLE control #${hardware.sequence}'
                   : 'Offline',
               color: hardware.connected
                   ? const Color(0xFF0F766E)
@@ -265,7 +265,7 @@ class _TopBar extends StatelessWidget {
             _StatusPill(
               label: 'Path nodes',
               value: hardware.connected && hardware.pathNodes.isEmpty
-                  ? 'ESP-NOW armed'
+                  ? 'BLE gateway armed'
                   : 'P1 ${hardware.pathNodes['PLEOS-PATH1'] == true ? 'ACK' : '--'}  ·  '
                         'P2 ${hardware.pathNodes['PLEOS-PATH2'] == true ? 'ACK' : '--'}',
               color: hardware.connected && hardware.pathNodes.isEmpty
@@ -1215,7 +1215,7 @@ class _ScenarioDef {
       mrmPolicy: 'standby',
       metrics: [
         'Three links normal',
-        'ESP-NOW heartbeat active',
+        'BLE GPIO ACK active',
         'Recovery armed',
       ],
       reportMapping: ['3개 스위치 정상 경로 기준', 'NC pass-through 상태 검증'],
