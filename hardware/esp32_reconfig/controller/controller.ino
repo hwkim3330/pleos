@@ -287,6 +287,10 @@ Health parseHealth(const String &value) {
 }
 
 void processCommand(const String &command, bool forwardToNode = true) {
+  if (command == "!SYNC") {
+    sendState("sync");
+    return;
+  }
   if (command == "!RECOVER") {
     applyScenarioNumber(4, forwardToNode);
     return;

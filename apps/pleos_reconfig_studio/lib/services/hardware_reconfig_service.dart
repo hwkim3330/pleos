@@ -111,6 +111,7 @@ class HardwareReconfigService {
       await _valueSubscription?.cancel();
       _valueSubscription = control.lastValueStream.listen(_onBleValue);
       await control.setNotifyValue(true);
+      await control.write(utf8.encode('!SYNC'), withoutResponse: false);
     } catch (_) {
       await device.disconnect();
       _bleDisconnected();

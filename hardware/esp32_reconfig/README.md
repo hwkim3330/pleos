@@ -22,7 +22,7 @@ The controller advertises as `PLEOS-RECONFIG` after every boot. The Android app 
 | Service | `7d2f0001-7c7a-4f7b-9b51-0af9a281d110` |
 | Notify/write control | `7d2f0002-7c7a-4f7b-9b51-0af9a281d110` |
 
-Commands are UTF-8 `!RECOVER`, `!SCENARIO:n`, or `!CHANNEL:id:health`. Notifications are short `!STATE`, `!CHANNEL`, and `!EVENT` records so they remain below the negotiated BLE MTU.
+Commands are UTF-8 `!SYNC`, `!RECOVER`, `!SCENARIO:n`, or `!CHANNEL:id:health`. The app sends `!SYNC` after subscribing so a reconnect always receives a complete snapshot. Notifications are short `!STATE`, `!CHANNEL`, and `!EVENT` records so they remain below the negotiated BLE MTU.
 
 The inline boards always boot into normally-closed bypass. An isolated relay is held only while the controller refreshes its command every second; loss of USB/controller communication triggers local recovery after five seconds. Fault state is deliberately not restored from flash after reboot.
 
