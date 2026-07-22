@@ -17,15 +17,20 @@ class CarViewerScreen extends ConsumerStatefulWidget {
 }
 
 class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
-  var _labelsVisible = true;
+  var _labelsVisible = false;
   var _topologyVisible = false;
   var _metricsVisible = true;
+  var _pathPanelVisible = false;
   _ScenarioDef _selectedScenario = _ScenarioDef.values.first;
 
   @override
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(faultProvider));
+    Future<void>.delayed(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      ref.read(hardwareReconfigServiceProvider).recover();
+    });
   }
 
   Future<void> _waitForJsAndInitialize() async {
@@ -43,13 +48,53 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
     await service.toggleHotspots(_labelsVisible);
   }
 
-  void _applyScenario(_ScenarioDef scenario) {
+  Future<void> _applyScenario(_ScenarioDef scenario) async {
     setState(() => _selectedScenario = scenario);
     ref.read(faultProvider.notifier).applyScenario(scenario.id);
+    final hardware = ref.read(hardwareReconfigServiceProvider);
+    if (scenario.id == 'normal' || scenario.id == 'recoveryAudit') {
+      hardware.recover();
+    } else if (scenario.id == 'path1') {
+      hardware.setExclusivePathFault(1);
+    } else if (scenario.id == 'path2') {
+      hardware.setExclusivePathFault(2);
+    } else if (scenario.id == 'path3') {
+      hardware.setExclusivePathFault(3);
+    } else if (scenario.id == 'dualFront') {
+      hardware.setChannel('tsn_front_a', 'FAULT');
+      hardware.setChannel('tsn_front_b', 'FAULT');
+      hardware.setChannel('tsn_rear', 'NORMAL');
+    } else if (scenario.id == 'allPaths') {
+      hardware.setChannel('tsn_front_a', 'FAULT');
+      hardware.setChannel('tsn_front_b', 'FAULT');
+      hardware.setChannel('tsn_rear', 'FAULT');
+    } else if (scenario.id == 'sequence') {
+      for (final id in ['tsn_front_a', 'tsn_front_b', 'tsn_rear']) {
+        hardware.recover();
+        await Future<void>.delayed(const Duration(milliseconds: 450));
+        hardware.setChannel(id, 'FAULT');
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+      }
+      hardware.recover();
+    } else {
+      hardware.setChannel(
+        'tsn_front_a',
+        scenario.id == 'switchA' ? 'FAULT' : 'NORMAL',
+      );
+      hardware.setChannel(
+        'tsn_front_b',
+        scenario.id == 'switchB' ? 'FAULT' : 'NORMAL',
+      );
+      hardware.setChannel(
+        'tsn_rear',
+        scenario.id == 'switchRear' ? 'FAULT' : 'NORMAL',
+      );
+    }
   }
 
   void _recover() {
     ref.read(faultProvider.notifier).clearAll();
+    ref.read(hardwareReconfigServiceProvider).recover();
     ref.read(viewerServiceProvider).resetCameraOrbit();
     setState(() => _selectedScenario = _ScenarioDef.values.first);
   }
@@ -73,9 +118,9 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const ColoredBox(color: Color(0xFFF6F8FB)),
+          const ColoredBox(color: Color(0xFFF2F4F7)),
           ModelViewer(
-            backgroundColor: const Color(0xFFF6F8FB),
+            backgroundColor: const Color(0xFFF2F4F7),
             id: 'car',
             src: 'lib/assets/roii_reconfig.glb',
             alt: 'PLEOS reconfigurable E/E architecture vehicle',
@@ -126,16 +171,17 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               faults: faults,
             ),
           ),
-          Positioned(
-            left: 248,
-            right: 348,
-            bottom: 118,
-            child: _ModeCard(
-              mode: mode,
-              scenario: _selectedScenario,
-              hardware: hardware,
+          if (_pathPanelVisible)
+            Positioned(
+              left: 248,
+              right: 348,
+              bottom: 118,
+              child: _ModeCard(
+                mode: mode,
+                scenario: _selectedScenario,
+                hardware: hardware,
+              ),
             ),
-          ),
           Positioned(
             left: 14,
             right: 14,
@@ -144,12 +190,15 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               labelsVisible: _labelsVisible,
               topologyVisible: _topologyVisible,
               metricsVisible: _metricsVisible,
+              pathPanelVisible: _pathPanelVisible,
               mode: mode,
               onToggleLabels: _toggleLabels,
               onToggleTopology: () =>
                   setState(() => _topologyVisible = !_topologyVisible),
               onToggleMetrics: () =>
                   setState(() => _metricsVisible = !_metricsVisible),
+              onTogglePathPanel: () =>
+                  setState(() => _pathPanelVisible = !_pathPanelVisible),
               onToggleShell: () =>
                   ref.read(viewerServiceProvider).toggleMaterials(),
               onRecover: _recover,
@@ -189,7 +238,7 @@ class _TopBar extends StatelessWidget {
           children: [
             const Icon(
               Icons.account_tree_rounded,
-              color: Color(0xFF155EEF),
+              color: Color(0xFF4EA1FF),
               size: 20,
             ),
             const SizedBox(width: 8),
@@ -198,7 +247,7 @@ class _TopBar extends StatelessWidget {
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w900,
-                color: Color(0xFF0F172A),
+                color: Color(0xFF172033),
               ),
             ),
             const SizedBox(width: 14),
@@ -222,11 +271,15 @@ class _TopBar extends StatelessWidget {
             const SizedBox(width: 8),
             _StatusPill(
               label: 'Path nodes',
-              value:
-                  '${hardware.pathNodes.values.where((online) => online).length}/2 online',
-              color:
-                  hardware.pathNodes.values.where((online) => online).length ==
-                      2
+              value: hardware.connected && hardware.pathNodes.isEmpty
+                  ? 'ESP-NOW armed'
+                  : '${hardware.pathNodes.values.where((online) => online).length}/2 online',
+              color: hardware.connected && hardware.pathNodes.isEmpty
+                  ? const Color(0xFF0F766E)
+                  : hardware.pathNodes.values
+                            .where((online) => online)
+                            .length ==
+                        2
                   ? const Color(0xFF0F766E)
                   : const Color(0xFFD97706),
             ),
@@ -248,7 +301,7 @@ class _TopBar extends StatelessWidget {
             const _StatusPill(
               label: 'Network',
               value: 'TSN/FRER',
-              color: Color(0xFF155EEF),
+              color: Color(0xFF4EA1FF),
             ),
           ],
         ),
@@ -276,7 +329,7 @@ class _ScenarioRail extends StatelessWidget {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF0F172A),
+              color: Color(0xFF172033),
             ),
           ),
           const SizedBox(height: 4),
@@ -299,7 +352,7 @@ class _ScenarioRail extends StatelessWidget {
                 return Material(
                   color: active
                       ? scenario.color.withValues(alpha: 0.12)
-                      : Colors.white.withValues(alpha: 0.72),
+                      : const Color(0xFFFFFFFF).withValues(alpha: 0.94),
                   borderRadius: BorderRadius.circular(8),
                   child: InkWell(
                     onTap: () => onSelected(scenario),
@@ -311,7 +364,7 @@ class _ScenarioRail extends StatelessWidget {
                         border: Border.all(
                           color: active
                               ? scenario.color
-                              : const Color(0xFFE2E8F0),
+                              : const Color(0xFFD0D5DD),
                         ),
                       ),
                       child: Row(
@@ -329,7 +382,7 @@ class _ScenarioRail extends StatelessWidget {
                                   style: const TextStyle(
                                     fontSize: 11.5,
                                     fontWeight: FontWeight.w900,
-                                    color: Color(0xFF0F172A),
+                                    color: Color(0xFF172033),
                                   ),
                                 ),
                                 const SizedBox(height: 2),
@@ -384,7 +437,7 @@ class _EvidencePanel extends StatelessWidget {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF0F172A),
+              color: Color(0xFF172033),
             ),
           ),
           const SizedBox(height: 8),
@@ -411,7 +464,7 @@ class _EvidencePanel extends StatelessWidget {
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF475569),
+              color: Color(0xFF667085),
             ),
           ),
           const SizedBox(height: 6),
@@ -419,12 +472,12 @@ class _EvidencePanel extends StatelessWidget {
             child: faults.isEmpty
                 ? const Center(
                     child: Text(
-                      'No active fault\nTriple sensor baseline',
+                      'No active fault\nNetwork baseline',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
-                        color: Color(0xFF94A3B8),
+                        color: Color(0xFF667085),
                       ),
                     ),
                   )
@@ -449,7 +502,7 @@ class _EvidencePanel extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              fault.target,
+                              _faultTargetLabel(fault.target),
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w900,
@@ -464,7 +517,7 @@ class _EvidencePanel extends StatelessWidget {
                               style: const TextStyle(
                                 fontSize: 10.5,
                                 fontWeight: FontWeight.w800,
-                                color: Color(0xFF334155),
+                                color: Color(0xFF344054),
                               ),
                             ),
                           ],
@@ -478,6 +531,16 @@ class _EvidencePanel extends StatelessWidget {
     );
   }
 }
+
+String _faultTargetLabel(String target) => switch (target) {
+  'Path1Route' => 'Path 1 (F-A ↔ R)',
+  'Path2Route' => 'Path 2 (F-B ↔ R)',
+  'Path3Route' => 'Path 3 (F-A ↔ F-B)',
+  'FrontSwitchA' => 'Front A Switch',
+  'FrontSwitchB' => 'Front B Switch',
+  'RearSwitch' => 'Rear Switch',
+  _ => target,
+};
 
 class _ModeCard extends StatelessWidget {
   const _ModeCard({
@@ -502,7 +565,7 @@ class _ModeCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              'INLINE RECONFIGURATION PATH',
+              'FRONT INLINE RECONFIGURATION',
               style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w900,
@@ -514,22 +577,22 @@ class _ModeCard extends StatelessWidget {
               children: [
                 _PathPair(
                   fromLabel: 'F-A',
-                  espLabel: 'ESP-AB',
-                  toLabel: 'F-B',
-                  armed: hardware.ioNodeConnected,
-                ),
-                const SizedBox(height: 4),
-                _PathPair(
-                  fromLabel: 'F-A',
-                  espLabel: 'ESP-AR',
+                  espLabel: 'PATH 1 / ESP-AR',
                   toLabel: 'R',
                   armed: hardware.ioNodeConnected,
                 ),
                 const SizedBox(height: 4),
                 _PathPair(
                   fromLabel: 'F-B',
-                  espLabel: 'ESP-BR',
+                  espLabel: 'PATH 2 / ESP-BR',
                   toLabel: 'R',
+                  armed: hardware.ioNodeConnected,
+                ),
+                const SizedBox(height: 4),
+                _PathPair(
+                  fromLabel: 'F-A',
+                  espLabel: 'PATH 3 / 7-INCH ESP',
+                  toLabel: 'F-B',
                   armed: hardware.ioNodeConnected,
                 ),
               ],
@@ -672,7 +735,7 @@ class _TimelinePanel extends StatelessWidget {
                   width: 22,
                   height: 2,
                   margin: const EdgeInsets.symmetric(horizontal: 4),
-                  color: const Color(0xFFCBD5E1),
+                  color: const Color(0xFF344054),
                 ),
             ],
             const SizedBox(width: 14),
@@ -705,10 +768,12 @@ class _BottomConsole extends StatelessWidget {
     required this.labelsVisible,
     required this.topologyVisible,
     required this.metricsVisible,
+    required this.pathPanelVisible,
     required this.mode,
     required this.onToggleLabels,
     required this.onToggleTopology,
     required this.onToggleMetrics,
+    required this.onTogglePathPanel,
     required this.onToggleShell,
     required this.onRecover,
   });
@@ -716,10 +781,12 @@ class _BottomConsole extends StatelessWidget {
   final bool labelsVisible;
   final bool topologyVisible;
   final bool metricsVisible;
+  final bool pathPanelVisible;
   final _ReconfigMode mode;
   final VoidCallback onToggleLabels;
   final VoidCallback onToggleTopology;
   final VoidCallback onToggleMetrics;
+  final VoidCallback onTogglePathPanel;
   final VoidCallback onToggleShell;
   final VoidCallback onRecover;
 
@@ -751,6 +818,12 @@ class _BottomConsole extends StatelessWidget {
               label: metricsVisible ? 'Hide Metrics' : 'Show Metrics',
               active: metricsVisible,
               onTap: onToggleMetrics,
+            ),
+            _ToolButton(
+              icon: Icons.hub_rounded,
+              label: pathPanelVisible ? 'Hide Path Panel' : 'Show Path Panel',
+              active: pathPanelVisible,
+              onTap: onTogglePathPanel,
             ),
             _ToolButton(
               icon: Icons.layers_rounded,
@@ -791,7 +864,7 @@ class _TopologyPainter extends CustomPainter {
       'VCU': Offset(size.width * 0.45, size.height * 0.42),
     };
     final linkPaint = Paint()
-      ..color = const Color(0xFF155EEF).withValues(alpha: 0.26)
+      ..color = const Color(0xFF4EA1FF).withValues(alpha: 0.26)
       ..strokeWidth = 3
       ..style = PaintingStyle.stroke;
     final fallbackPaint = Paint()
@@ -812,12 +885,12 @@ class _TopologyPainter extends CustomPainter {
       final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(5));
       canvas.drawRRect(
         rrect,
-        Paint()..color = Colors.white.withValues(alpha: 0.78),
+        Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: 0.94),
       );
       canvas.drawRRect(
         rrect,
         Paint()
-          ..color = const Color(0xFF155EEF).withValues(alpha: 0.48)
+          ..color = const Color(0xFF4EA1FF).withValues(alpha: 0.48)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.5,
       );
@@ -825,7 +898,7 @@ class _TopologyPainter extends CustomPainter {
         text: TextSpan(
           text: entry.key,
           style: const TextStyle(
-            color: Color(0xFF1D4ED8),
+            color: Color(0xFF76B8FF),
             fontSize: 10,
             fontWeight: FontWeight.w900,
           ),
@@ -858,7 +931,7 @@ class _EvidenceBlock extends StatelessWidget {
             style: const TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF475569),
+              color: Color(0xFF667085),
             ),
           ),
           const SizedBox(height: 4),
@@ -873,7 +946,7 @@ class _EvidenceBlock extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 10.5,
                       fontWeight: FontWeight.w900,
-                      color: Color(0xFF94A3B8),
+                      color: Color(0xFF667085),
                     ),
                   ),
                   Expanded(
@@ -883,7 +956,7 @@ class _EvidenceBlock extends StatelessWidget {
                         fontSize: 10.5,
                         height: 1.2,
                         fontWeight: FontWeight.w700,
-                        color: Color(0xFF334155),
+                        color: Color(0xFF344054),
                       ),
                     ),
                   ),
@@ -962,7 +1035,7 @@ class _TimelineStep extends StatelessWidget {
           height: 18,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: active ? color : const Color(0xFFE2E8F0),
+            color: active ? color : const Color(0xFFD0D5DD),
           ),
           child: const Icon(Icons.check_rounded, color: Colors.white, size: 13),
         ),
@@ -972,7 +1045,7 @@ class _TimelineStep extends StatelessWidget {
           style: const TextStyle(
             fontSize: 9.5,
             fontWeight: FontWeight.w900,
-            color: Color(0xFF475569),
+            color: Color(0xFF667085),
           ),
         ),
       ],
@@ -1084,9 +1157,9 @@ class _ToolButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = active ? const Color(0xFF155EEF) : const Color(0xFF334155);
+    final color = active ? const Color(0xFF1677FF) : const Color(0xFF344054);
     return Material(
-      color: active ? const Color(0xFFEFF6FF) : Colors.white,
+      color: active ? const Color(0xFFEAF2FF) : Colors.white,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
@@ -1097,7 +1170,7 @@ class _ToolButton extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: active ? const Color(0xFFBFDBFE) : const Color(0xFFE2E8F0),
+              color: active ? const Color(0xFF1677FF) : const Color(0xFFD0D5DD),
             ),
           ),
           child: Row(
@@ -1138,9 +1211,9 @@ class _Glass extends StatelessWidget {
       width: width,
       padding: padding,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.86),
+        color: const Color(0xFFFFFFFF).withValues(alpha: 0.94),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: const Color(0xFFD0D5DD)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.07),
@@ -1194,6 +1267,232 @@ class _ScenarioDef {
   final String jitter;
 
   static const values = [
+    _ScenarioDef(
+      id: 'normal',
+      category: 'Baseline',
+      title: 'All paths normal',
+      icon: Icons.verified_rounded,
+      color: Color(0xFF16A34A),
+      cause: 'All three Ethernet paths are available.',
+      effect: 'Front A, Front B and Rear links remain in NC pass-through.',
+      action: 'Maintain nominal TSN/FRER routing and arm recovery validation.',
+      modeName: 'Triple-path normal',
+      fusion: 'Path A + Path B + Rear',
+      safetyGoal: 'Full network availability',
+      mrmPolicy: 'standby',
+      metrics: [
+        'Three links normal',
+        'ESP-NOW heartbeat active',
+        'Recovery armed',
+      ],
+      reportMapping: ['3개 스위치 정상 경로 기준', 'NC pass-through 상태 검증'],
+      switchTime: '0ms',
+      latency: '1ms',
+      jitter: '0.5ms',
+    ),
+    _ScenarioDef(
+      id: 'path1',
+      category: 'Path Fault',
+      title: 'Path 1 Link Down',
+      icon: Icons.cable_rounded,
+      color: Color(0xFFF59E0B),
+      cause: 'Front A to Rear Ethernet link is down via ESP-AR.',
+      effect:
+          'Path 1 (F-A ↔ R) is unavailable while Paths 2 and 3 remain healthy.',
+      action:
+          'Detect link loss, isolate Path 1 and retain traffic on redundant paths.',
+      modeName: 'Path 1 isolated',
+      fusion: 'Path 2 + Path 3 active',
+      safetyGoal: 'Single-path fail-operational',
+      mrmPolicy: 'standby',
+      metrics: [
+        'Path 1 feedback FAULT',
+        'Path 2 remains NORMAL',
+        'Path 3 remains NORMAL',
+      ],
+      reportMapping: ['FRER Path 1 단독 고장 주입', '링크 검출 및 우회 검증'],
+      switchTime: '34ms',
+      latency: '1ms',
+      jitter: '0.5ms',
+    ),
+    _ScenarioDef(
+      id: 'path2',
+      category: 'Path Fault',
+      title: 'Path 2 Link Down',
+      icon: Icons.cable_rounded,
+      color: Color(0xFFF59E0B),
+      cause: 'Front B to Rear Ethernet link is down via ESP-BR.',
+      effect:
+          'Path 2 (F-B ↔ R) is unavailable while Paths 1 and 3 remain healthy.',
+      action:
+          'Detect link loss, isolate Path 2 and retain traffic on redundant paths.',
+      modeName: 'Path 2 isolated',
+      fusion: 'Path 1 + Path 3 active',
+      safetyGoal: 'Single-path fail-operational',
+      mrmPolicy: 'standby',
+      metrics: [
+        'Path 2 feedback FAULT',
+        'Path 1 remains NORMAL',
+        'Path 3 remains NORMAL',
+      ],
+      reportMapping: ['FRER Path 2 단독 고장 주입', '링크 검출 및 우회 검증'],
+      switchTime: '35ms',
+      latency: '1ms',
+      jitter: '0.5ms',
+    ),
+    _ScenarioDef(
+      id: 'path3',
+      category: 'Path Fault',
+      title: 'Path 3 Link Down',
+      icon: Icons.cable_rounded,
+      color: Color(0xFFF59E0B),
+      cause: '7-inch ESP opens the Front A to Front B injection module.',
+      effect:
+          'Path 3 (F-A ↔ F-B) is unavailable while both rear routes remain healthy.',
+      action:
+          'Detect the cross-front link loss and retain traffic through Rear.',
+      modeName: 'Path 3 isolated',
+      fusion: 'Path 1 + Path 2 active',
+      safetyGoal: 'Cross-path isolation',
+      mrmPolicy: 'standby',
+      metrics: [
+        'Path 3 feedback FAULT',
+        'Path 1 remains NORMAL',
+        'Path 2 remains NORMAL',
+      ],
+      reportMapping: ['7인치 ESP Path 3 단독 고장 주입', '후방 우회 경로 유지 검증'],
+      switchTime: '37ms',
+      latency: '1ms',
+      jitter: '0.5ms',
+    ),
+    _ScenarioDef(
+      id: 'switchA',
+      category: 'Switch Fault',
+      title: 'Front A Switch Fault',
+      icon: Icons.hub_rounded,
+      color: Color(0xFFDC2626),
+      cause: 'Front A switch stops forwarding Ethernet traffic.',
+      effect: 'Paths 1 and 3 are affected at the Front A endpoint.',
+      action: 'Isolate Front A and reroute traffic through Front B and Rear.',
+      modeName: 'Front A isolated',
+      fusion: 'Front B ↔ Rear retained',
+      safetyGoal: 'Switch fault containment',
+      mrmPolicy: 'candidate',
+      metrics: ['Front A fault confirmed', 'Front B NORMAL', 'Rear NORMAL'],
+      reportMapping: ['전방 A 스위치 단독 고장', '스위치 격리 및 우회 검증'],
+      switchTime: 'measured',
+      latency: 'measured',
+      jitter: 'measured',
+    ),
+    _ScenarioDef(
+      id: 'switchB',
+      category: 'Switch Fault',
+      title: 'Front B Switch Fault',
+      icon: Icons.hub_rounded,
+      color: Color(0xFFDC2626),
+      cause: 'Front B switch stops forwarding Ethernet traffic.',
+      effect: 'Paths 2 and 3 are affected at the Front B endpoint.',
+      action: 'Isolate Front B and reroute traffic through Front A and Rear.',
+      modeName: 'Front B isolated',
+      fusion: 'Front A ↔ Rear retained',
+      safetyGoal: 'Switch fault containment',
+      mrmPolicy: 'candidate',
+      metrics: ['Front B fault confirmed', 'Front A NORMAL', 'Rear NORMAL'],
+      reportMapping: ['전방 B 스위치 단독 고장', '스위치 격리 및 우회 검증'],
+      switchTime: 'measured',
+      latency: 'measured',
+      jitter: 'measured',
+    ),
+    _ScenarioDef(
+      id: 'switchRear',
+      category: 'Switch Fault',
+      title: 'Rear Switch Fault',
+      icon: Icons.hub_rounded,
+      color: Color(0xFFDC2626),
+      cause: 'Rear switch stops forwarding Ethernet traffic.',
+      effect: 'Paths 1 and 2 are affected at the Rear endpoint.',
+      action: 'Isolate Rear and retain the Front A ↔ Front B path.',
+      modeName: 'Rear switch isolated',
+      fusion: 'Path 3 retained',
+      safetyGoal: 'Switch fault containment',
+      mrmPolicy: 'candidate',
+      metrics: ['Rear fault confirmed', 'Front A NORMAL', 'Front B NORMAL'],
+      reportMapping: ['후방 스위치 단독 고장', 'Path 3 유지 및 MRM 조건 검증'],
+      switchTime: 'measured',
+      latency: 'measured',
+      jitter: 'measured',
+    ),
+    _ScenarioDef(
+      id: 'sequence',
+      category: 'Automated Test',
+      title: 'Path 1 → 2 → 3',
+      icon: Icons.playlist_play_rounded,
+      color: Color(0xFF1677FF),
+      cause: 'Run each path fault independently in a fixed sequence.',
+      effect:
+          'Verifies command, feedback, isolation and recovery for all paths.',
+      action: 'Inject each path for 0.9 seconds and recover between steps.',
+      modeName: 'Sequence validation',
+      fusion: 'P1 → recover → P2 → recover → P3 → recover',
+      safetyGoal: 'Repeatable validation',
+      mrmPolicy: 'not required',
+      metrics: [
+        'Three commands acknowledged',
+        'No stale fault remains',
+        'Final NC recovery',
+      ],
+      reportMapping: ['3개 경로 자동 시험 순서', '주입·검출·격리·복구 증적'],
+      switchTime: 'Auto',
+      latency: 'measured',
+      jitter: 'measured',
+    ),
+    _ScenarioDef(
+      id: 'dualFront',
+      category: 'Compound Fault',
+      title: 'Path 1 + 2 Link Down',
+      icon: Icons.call_split_rounded,
+      color: Color(0xFFD97706),
+      cause: 'Both Front-to-Rear links are down simultaneously.',
+      effect: 'Only the Front A-to-B path through the 7-inch ESP remains.',
+      action: 'Validate constrained operation over Path 3 and arm MRM.',
+      modeName: 'Single-path fallback',
+      fusion: 'Path 3 only',
+      safetyGoal: 'Degraded connectivity',
+      mrmPolicy: 'candidate',
+      metrics: ['Paths 1/2 FAULT', 'Path 3 NORMAL', 'Fallback route retained'],
+      reportMapping: ['이중 링크 고장 조합', '단일 잔여 경로 운용 검증'],
+      switchTime: '72ms',
+      latency: 'measured',
+      jitter: 'measured',
+    ),
+    _ScenarioDef(
+      id: 'allPaths',
+      category: 'MRM Test',
+      title: 'All Paths Link Down',
+      icon: Icons.emergency_rounded,
+      color: Color(0xFFDC2626),
+      cause: 'Links for Paths 1, 2 and 3 are down simultaneously.',
+      effect: 'No valid Ethernet route remains between the three switches.',
+      action: 'Declare network isolation, execute MRM and verify NC recovery.',
+      modeName: 'MRM safe stop',
+      fusion: 'No network path',
+      safetyGoal: 'Minimal risk condition',
+      mrmPolicy: 'active',
+      metrics: [
+        'Three paths FAULT',
+        'MRM state confirmed',
+        'Recover all required',
+      ],
+      reportMapping: ['전체 네트워크 단절 고장', 'MRM 진입 및 복구 검증'],
+      switchTime: 'MRM',
+      latency: 'measured',
+      jitter: 'measured',
+    ),
+  ];
+
+  // Kept as reference material while the hardware validation UI is path-only.
+  // ignore: unused_field
+  static const legacyValues = [
     _ScenarioDef(
       id: 'triple',
       category: 'Baseline',
@@ -1474,12 +1773,13 @@ class _ReconfigMode {
     _ScenarioDef scenario,
     List<FaultData> faults,
   ) {
-    if (scenario.id == 'triple' && faults.isEmpty) {
+    if ((scenario.id == 'normal' || scenario.id == 'triple') &&
+        faults.isEmpty) {
       return const _ReconfigMode(
-        name: 'Triple sensor',
-        localization: 'LiDAR + GNSS + Camera',
-        planning: 'Normal route',
-        control: 'Normal MPC control',
+        name: 'Network nominal',
+        localization: 'Path A + Path B + Rear confirmed',
+        planning: 'Autoware route retained',
+        control: 'Nominal control retained',
         color: Color(0xFF16A34A),
         icon: Icons.verified_rounded,
         isFaulted: false,
@@ -1512,25 +1812,19 @@ class _ReconfigMode {
         isMrm: true,
       );
     }
-    final normalized = switch (mode) {
-      'TRIPLE' => 'Triple sensor',
-      'DUAL' => 'Dual sensor',
-      'SINGLE' => 'Single sensor',
-      _ => mode,
-    };
-    final color = mode == 'TRIPLE'
-        ? const Color(0xFF16A34A)
-        : const Color(0xFFF59E0B);
+    final degraded = faults.isNotEmpty;
+    final normalized = degraded ? 'FRER degraded' : 'Network nominal';
+    final color = degraded ? const Color(0xFFF59E0B) : const Color(0xFF16A34A);
     return _ReconfigMode(
       name: normalized,
-      localization: '$normalized confirmed by ESP controller',
-      planning: mode == 'TRIPLE' ? 'Normal route' : 'Constraint-aware route',
-      control: mode == 'TRIPLE' ? 'Normal MPC control' : 'Confidence-based cap',
+      localization: degraded
+          ? 'Redundant Ethernet route confirmed'
+          : 'Three paths confirmed by ESP controller',
+      planning: 'Autoware route retained',
+      control: degraded ? 'Fail-operational control' : 'Nominal control',
       color: color,
-      icon: mode == 'TRIPLE'
-          ? Icons.verified_rounded
-          : Icons.change_circle_rounded,
-      isFaulted: faults.isNotEmpty,
+      icon: degraded ? Icons.alt_route_rounded : Icons.verified_rounded,
+      isFaulted: degraded,
       isMrm: false,
     );
   }

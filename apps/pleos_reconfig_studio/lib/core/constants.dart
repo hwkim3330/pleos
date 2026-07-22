@@ -142,6 +142,36 @@ class ErrorHotspotConfig {
 /// Material name -> Error Hotspot 설정 매핑
 /// fault.target = material name으로 직접 사용
 const Map<String, ErrorHotspotConfig> errorHotspotConfigs = {
+  'Path1Route': ErrorHotspotConfig(
+    position: '-1.25m 6m 5m',
+    dataTarget: '-1.25m -7m 5m',
+    dataOrbit: '135deg 45deg 2.5m',
+  ),
+  'Path2Route': ErrorHotspotConfig(
+    position: '1.25m 6m 5m',
+    dataTarget: '1.25m -7m 5m',
+    dataOrbit: '135deg 45deg 2.5m',
+  ),
+  'Path3Route': ErrorHotspotConfig(
+    position: '0m 7m 14m',
+    dataTarget: '0m -6m 14m',
+    dataOrbit: '135deg 45deg 2.5m',
+  ),
+  'FrontSwitchA': ErrorHotspotConfig(
+    position: '-2.45m 7m 14m',
+    dataTarget: '-2.45m -6m 14m',
+    dataOrbit: '135deg 45deg 2.5m',
+  ),
+  'FrontSwitchB': ErrorHotspotConfig(
+    position: '2.45m 7m 14m',
+    dataTarget: '2.45m -6m 14m',
+    dataOrbit: '135deg 45deg 2.5m',
+  ),
+  'RearSwitch': ErrorHotspotConfig(
+    position: '0m 7m -4m',
+    dataTarget: '0m -6m -4m',
+    dataOrbit: '135deg 45deg 2.5m',
+  ),
   // 장치
   'FrontZC': ErrorHotspotConfig(
     position: '0m 6m 14m',
@@ -292,4 +322,29 @@ const Map<String, ErrorHotspotConfig> errorHotspotConfigs = {
     dataTarget: '0m -6m 16m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
+};
+
+const Map<String, List<String>> alertMaterialGroups = {
+  'Path1Route': [
+    'connection-FrontZC-Path1-1',
+    'connection-FrontZC-Path1-2',
+    'connection-FrontZC-Path1-3',
+    'Path1',
+    'connection-Path1-RearZC-1',
+    'connection-Path1-RearZC-2',
+    'connection-Path1-RearZC-3',
+  ],
+  'Path2Route': [
+    'connection-FrontZC-Path2-1',
+    'connection-FrontZC-Path2-2',
+    'connection-FrontZC-Path2-3',
+    'Path2',
+    'connection-Path2-RearZC-1',
+    'connection-Path2-RearZC-2',
+    'connection-Path2-RearZC-3',
+  ],
+  'Path3Route': ['FrontZC-Path', 'FrontZC_split_switches'],
+  'FrontSwitchA': ['FrontZC'],
+  'FrontSwitchB': ['FrontZC'],
+  'RearSwitch': ['RearZC'],
 };

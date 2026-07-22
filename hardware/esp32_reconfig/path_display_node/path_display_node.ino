@@ -14,8 +14,8 @@ namespace {
 #ifndef PLEOS_PATH_INDEX
 #define PLEOS_PATH_INDEX 0
 #endif
-static_assert(PLEOS_PATH_INDEX == 0 || PLEOS_PATH_INDEX == 1,
-              "PLEOS_PATH_INDEX must be 0 (Path1) or 1 (Path2)");
+static_assert(PLEOS_PATH_INDEX >= 0 && PLEOS_PATH_INDEX <= 2,
+              "PLEOS_PATH_INDEX must be 0 (Path1), 1 (Path2), or 2 (Path3)");
 
 constexpr int kTftCs = 5;
 constexpr int kTftDc = 16;
@@ -34,10 +34,10 @@ constexpr uint32_t kInjectHoldMs = 600;
 constexpr uint32_t kManualOverrideMs = 1200;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
-constexpr const char *kPathNames[] = {"PATH 1", "PATH 2"};
-constexpr const char *kChannelIds[] = {"tsn_front_a", "tsn_front_b"};
-constexpr const char *kNodeIds[] = {"PLEOS_PATH_1", "PLEOS_PATH_2"};
-constexpr const char *kBleNames[] = {"PLEOS-PATH1", "PLEOS-PATH2"};
+constexpr const char *kPathNames[] = {"PATH 1", "PATH 2", "PATH 3"};
+constexpr const char *kChannelIds[] = {"tsn_front_a", "tsn_front_b", "tsn_rear"};
+constexpr const char *kNodeIds[] = {"PLEOS_PATH_1", "PLEOS_PATH_2", "PLEOS_PATH_3"};
+constexpr const char *kBleNames[] = {"PLEOS-PATH1", "PLEOS-PATH2", "PLEOS-PATH3"};
 constexpr char kBleServiceUuid[] = "7d2f0011-7c7a-4f7b-9b51-0af9a281d110";
 constexpr char kBleControlUuid[] = "7d2f0012-7c7a-4f7b-9b51-0af9a281d110";
 

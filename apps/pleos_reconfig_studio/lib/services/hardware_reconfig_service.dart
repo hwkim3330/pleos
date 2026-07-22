@@ -41,12 +41,18 @@ class HardwareReconfigService {
   StreamSubscription<List<int>>? _valueSubscription;
   Timer? _retry;
   Timer? _bleRetry;
+  Timer? _pathScanTimer;
   bool _disposed = false;
   bool _bleConnecting = false;
+  bool _gattConnecting = false;
   final Map<String, String> _bleChannels = {};
   String _bleMode = 'UNKNOWN';
   int _bleSequence = 0;
   bool _bleIoNodeConnected = false;
+  final Map<String, bool> _blePathNodes = {
+    'PLEOS-PATH1': false,
+    'PLEOS-PATH2': false,
+  };
 
   static final Guid _bleServiceUuid = Guid(
     '7d2f0001-7c7a-4f7b-9b51-0af9a281d110',
@@ -78,23 +84,24 @@ class HardwareReconfigService {
           }
         }
       });
-      await FlutterBluePlus.startScan(
-        withServices: [_bleServiceUuid],
-        timeout: const Duration(seconds: 5),
-      );
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 8));
+      await Future<void>.delayed(const Duration(seconds: 8));
     } catch (_) {
       // Android Automotive emulators commonly expose no BLE adapter.
     } finally {
       _bleConnecting = false;
-      if (!_disposed && _bleControl == null) {
+      if (!_disposed && _bleControl == null && !_gattConnecting) {
         _bleRetry?.cancel();
-        _bleRetry = Timer(const Duration(seconds: 3), _startBleScan);
+        _bleRetry = Timer(const Duration(seconds: 2), _startBleScan);
       }
     }
   }
 
   Future<void> _connectBle(BluetoothDevice device) async {
-    if (_disposed || _bleControl != null) return;
+    if (_disposed || _bleControl != null || _gattConnecting) return;
+    _gattConnecting = true;
+    _bleRetry?.cancel();
+    await FlutterBluePlus.stopScan();
     try {
       await device.connect(
         license: License.nonprofit,
@@ -102,11 +109,13 @@ class HardwareReconfigService {
         timeout: const Duration(seconds: 8),
       );
       _bleDevice = device;
+      await device.requestMtu(185);
       await _connectionSubscription?.cancel();
       _connectionSubscription = device.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected) _bleDisconnected();
       });
-      final services = await device.discoverServices();
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final services = await device.discoverServices(timeout: 12);
       final service = services.firstWhere(
         (item) => item.uuid == _bleServiceUuid,
       );
@@ -118,9 +127,12 @@ class HardwareReconfigService {
       _valueSubscription = control.lastValueStream.listen(_onBleValue);
       await control.setNotifyValue(true);
       await control.write(utf8.encode('!SYNC'), withoutResponse: false);
+      unawaited(_scanPathNodes());
     } catch (_) {
       await device.disconnect();
       _bleDisconnected();
+    } finally {
+      _gattConnecting = false;
     }
   }
 
@@ -150,6 +162,50 @@ class HardwareReconfigService {
         channels: Map.unmodifiable(_bleChannels),
         sequence: _bleSequence,
         ioNodeConnected: _bleIoNodeConnected,
+        pathNodes: Map.unmodifiable(_blePathNodes),
+      ),
+    );
+  }
+
+  Future<void> _scanPathNodes() async {
+    if (_disposed || _bleControl == null) return;
+    final seen = <String>{};
+    StreamSubscription<List<ScanResult>>? subscription;
+    try {
+      subscription = FlutterBluePlus.scanResults.listen((results) {
+        for (final result in results) {
+          final name = result.advertisementData.advName;
+          if (_blePathNodes.containsKey(name)) seen.add(name);
+        }
+      });
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
+      await Future<void>.delayed(const Duration(seconds: 4));
+      for (final name in _blePathNodes.keys) {
+        _blePathNodes[name] = seen.contains(name);
+      }
+      _emitBleState('Path node scan complete');
+    } catch (_) {
+      // Keep the controller GATT link authoritative if a background scan fails.
+    } finally {
+      await subscription?.cancel();
+      _pathScanTimer?.cancel();
+      if (!_disposed && _bleControl != null) {
+        _pathScanTimer = Timer(const Duration(seconds: 10), _scanPathNodes);
+      }
+    }
+  }
+
+  void _emitBleState(String event) {
+    if (_disposed || _bleControl == null) return;
+    _states.add(
+      HardwareReconfigState(
+        connected: true,
+        mode: _bleMode,
+        event: event,
+        channels: Map.unmodifiable(_bleChannels),
+        sequence: _bleSequence,
+        ioNodeConnected: _bleIoNodeConnected,
+        pathNodes: Map.unmodifiable(_blePathNodes),
       ),
     );
   }
@@ -157,6 +213,11 @@ class HardwareReconfigService {
   void _bleDisconnected() {
     _bleControl = null;
     _bleDevice = null;
+    _gattConnecting = false;
+    _pathScanTimer?.cancel();
+    for (final name in _blePathNodes.keys) {
+      _blePathNodes[name] = false;
+    }
     if (!_disposed) {
       _bleRetry?.cancel();
       _bleRetry = Timer(const Duration(seconds: 2), _startBleScan);
@@ -216,6 +277,9 @@ class HardwareReconfigService {
   void setChannel(String id, String health) =>
       _send({'command': 'channel', 'id': id, 'health': health});
 
+  void setExclusivePathFault(int path) =>
+      _send({'command': 'path', 'id': path});
+
   void recover() => _send({'command': 'recover'});
 
   void _send(Map<String, Object> command) {
@@ -226,6 +290,8 @@ class HardwareReconfigService {
         wireCommand = '!RECOVER';
       } else if (command['command'] == 'scenario') {
         wireCommand = '!SCENARIO:${command['id']}';
+      } else if (command['command'] == 'path') {
+        wireCommand = '!PATH:${command['id']}';
       } else {
         wireCommand = '!CHANNEL:${command['id']}:${command['health']}';
       }
@@ -252,6 +318,7 @@ class HardwareReconfigService {
     _disposed = true;
     _retry?.cancel();
     _bleRetry?.cancel();
+    _pathScanTimer?.cancel();
     if (directBle) await FlutterBluePlus.stopScan();
     await _scanSubscription?.cancel();
     await _connectionSubscription?.cancel();

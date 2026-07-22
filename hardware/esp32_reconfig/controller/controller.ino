@@ -178,6 +178,7 @@ void sendEspNowState() {
   PathNowFrame frame{kEspNowMagic, ++espNowSequence, kProtocolVersion, 0, 0};
   if (channels[0].health != Health::healthy) frame.isolatedMask |= 0x01;
   if (channels[1].health != Health::healthy) frame.isolatedMask |= 0x02;
+  if (channels[2].health != Health::healthy) frame.isolatedMask |= 0x04;
   frame.crc = crc16(reinterpret_cast<const uint8_t *>(&frame), sizeof(frame) - sizeof(frame.crc));
   static const uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
   esp_now_send(broadcast, reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
@@ -229,9 +230,10 @@ void deriveMode() {
   const bool gnss = available("gnss");
   const bool camera = available("camera");
   const int sensorKinds = static_cast<int>(lidar) + static_cast<int>(gnss) + static_cast<int>(camera);
-  const bool frontNetwork = available("tsn_front_a") || available("tsn_front_b");
-  const bool rearNetwork = available("tsn_rear");
-  if (!frontNetwork || !rearNetwork || sensorKinds == 0) effectiveMode = "MRM";
+  const int networkPaths = static_cast<int>(available("tsn_front_a")) +
+                           static_cast<int>(available("tsn_front_b")) +
+                           static_cast<int>(available("tsn_rear"));
+  if (networkPaths == 0 || sensorKinds == 0) effectiveMode = "MRM";
   else if (sensorKinds == 3) effectiveMode = "TRIPLE";
   else if (sensorKinds == 2) effectiveMode = "DUAL";
   else effectiveMode = "SINGLE";
@@ -336,6 +338,24 @@ void processCommand(const String &command, bool forwardToNode = true) {
   }
   if (command.startsWith("!SCENARIO:")) {
     applyScenarioNumber(command.substring(10).toInt(), forwardToNode);
+    return;
+  }
+  if (command.startsWith("!PATH:")) {
+    const int path = command.substring(6).toInt();
+    if (path < 1 || path > 3) return;
+    for (int i = 0; i < 3; ++i) channels[i].health = Health::healthy;
+    channels[path - 1].health = Health::failed;
+    lastEvent = "Exclusive path fault injected";
+    lvgl_port_lock(-1);
+    refreshUi();
+    lvgl_port_unlock();
+    if (forwardToNode) {
+      for (int i = 0; i < 3; ++i) {
+        sendNodeCommand(String("!CHANNEL:") + channels[i].id + ":" +
+                        healthName(channels[i].health));
+      }
+    }
+    sendState("path_fault", channels[path - 1].id);
     return;
   }
   if (!command.startsWith("!CHANNEL:")) return;

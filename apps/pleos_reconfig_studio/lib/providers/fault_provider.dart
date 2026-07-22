@@ -20,6 +20,7 @@ class FaultNotifier extends StateNotifier<Map<int, FaultData>> {
   final Ref ref;
   final FaultStreamService _faultStreamService = FaultStreamService();
   Map<String, String> _lastHardwareChannels = const {};
+  final Map<String, String> _hardwareTargetOverrides = {};
 
   void _initializeFaultStream() {
     _faultStreamService.startListening((event) {
@@ -73,9 +74,9 @@ class FaultNotifier extends StateNotifier<Map<int, FaultData>> {
     for (final entry in hardware.channels.entries) {
       if (entry.value == 'NORMAL') continue;
       final target = switch (entry.key) {
-        'tsn_front_a' => 'Path1',
-        'tsn_front_b' => 'FrontZC',
-        'tsn_rear' => 'RearZC',
+        'tsn_front_a' => _hardwareTargetOverrides[entry.key] ?? 'Path1Route',
+        'tsn_front_b' => _hardwareTargetOverrides[entry.key] ?? 'Path2Route',
+        'tsn_rear' => _hardwareTargetOverrides[entry.key] ?? 'Path3Route',
         'lidar_fl' => 'FrontLeftLidar',
         'lidar_fr' => 'FrontRightLidar',
         'lidar_rl' || 'lidar_rr' => 'RearCenterLidar',
@@ -190,6 +191,15 @@ class FaultNotifier extends StateNotifier<Map<int, FaultData>> {
 
   void applyScenario(String scenarioId) {
     clearAll(notifyHardware: false);
+    _hardwareTargetOverrides.clear();
+    switch (scenarioId) {
+      case 'switchA':
+        _hardwareTargetOverrides['tsn_front_a'] = 'FrontSwitchA';
+      case 'switchB':
+        _hardwareTargetOverrides['tsn_front_b'] = 'FrontSwitchB';
+      case 'switchRear':
+        _hardwareTargetOverrides['tsn_rear'] = 'RearSwitch';
+    }
     _sendScenarioToHardware(scenarioId);
     final faults = switch (scenarioId) {
       'triple' => <FaultData>[],

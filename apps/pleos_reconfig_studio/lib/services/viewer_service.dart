@@ -57,9 +57,10 @@ class ViewerService {
       )
     ''');
     // Material 점멸 추가 (여러 개 동시 점멸 가능)
-    await _controller?.runJavaScript(
-      'window.addAlertTarget?.("$materialName")',
-    );
+    for (final material
+        in alertMaterialGroups[materialName] ?? [materialName]) {
+      await _controller?.runJavaScript('window.addAlertTarget?.("$material")');
+    }
   }
 
   // Fault alert 숨기기 (hotspot 제거 + 해당 material 점멸 중지)
@@ -67,9 +68,12 @@ class ViewerService {
     await _controller?.runJavaScript(
       'window.removeErrorHotspot?.("$materialName")',
     );
-    await _controller?.runJavaScript(
-      'window.removeAlertTarget?.("$materialName")',
-    );
+    for (final material
+        in alertMaterialGroups[materialName] ?? [materialName]) {
+      await _controller?.runJavaScript(
+        'window.removeAlertTarget?.("$material")',
+      );
+    }
   }
 
   Future<void> stopAlert() async {

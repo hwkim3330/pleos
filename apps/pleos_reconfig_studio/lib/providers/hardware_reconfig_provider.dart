@@ -5,7 +5,7 @@ import '../services/hardware_reconfig_service.dart';
 final hardwareReconfigServiceProvider = Provider<HardwareReconfigService>((
   ref,
 ) {
-  final service = HardwareReconfigService();
+  final service = HardwareReconfigService(directBle: true);
   service.connect();
   ref.onDispose(service.dispose);
   return service;
