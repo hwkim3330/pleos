@@ -5,6 +5,9 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <SPI.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
 
 namespace {
 
@@ -27,6 +30,9 @@ constexpr uint32_t kCommandWatchdogMs = 1200;
 constexpr uint32_t kHeartbeatMs = 1000;
 constexpr uint32_t kUiRefreshMs = 200;
 constexpr uint32_t kButtonDebounceMs = 40;
+constexpr uint32_t kManualOverrideMs = 1200;
+constexpr uint8_t kEspNowChannel = 6;
+constexpr uint32_t kEspNowMagic = 0x504C454F;
 constexpr const char *kPathNames[] = {"PATH 1", "PATH 2"};
 constexpr const char *kChannelIds[] = {"tsn_front_a", "tsn_front_b"};
 constexpr const char *kNodeIds[] = {"PLEOS_PATH_1", "PLEOS_PATH_2"};
@@ -46,9 +52,38 @@ bool injectButtonHigh = true;
 bool recoverButtonHigh = true;
 uint32_t injectButtonChangedAt = 0;
 uint32_t recoverButtonChangedAt = 0;
+uint32_t manualOverrideUntil = 0;
+uint32_t lastNowSequence = 0;
+uint32_t lastNowReceiveAt = 0;
+volatile bool espNowPending = false;
+volatile bool espNowIsolated = false;
+const char *commandSource = "SAFE";
+int8_t previousRingHead = -1;
+uint16_t previousRingAccent = 0;
+bool ringRedrawPending = true;
 BLECharacteristic *bleControl = nullptr;
 volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
+
+struct __attribute__((packed)) PathNowFrame {
+  uint32_t magic;
+  uint32_t sequence;
+  uint8_t version;
+  uint8_t isolatedMask;
+  uint16_t crc;
+};
+
+uint16_t crc16(const uint8_t *data, size_t length) {
+  uint16_t crc = 0xFFFF;
+  for (size_t i = 0; i < length; ++i) {
+    crc ^= static_cast<uint16_t>(data[i]) << 8;
+    for (uint8_t bit = 0; bit < 8; ++bit) {
+      crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) :
+                             static_cast<uint16_t>(crc << 1);
+    }
+  }
+  return crc;
+}
 
 void notifyBle(const String &message) {
   if (!bleConnected || bleControl == nullptr) return;
@@ -72,42 +107,57 @@ uint16_t statusColor() {
 
 void drawLiveMetrics() {
   const uint16_t accent = statusColor();
-  display.fillRect(168, 12, 70, 14, ST77XX_BLACK);
+  display.fillRect(157, 12, 81, 14, ST77XX_BLACK);
   display.setTextSize(1);
-  display.setTextColor(bleConnected ? ST77XX_CYAN : 0x7BEF);
-  display.setCursor(172, 18);
-  display.print(bleConnected ? "BLE LIVE" : "BLE WAIT");
+  display.setTextColor(espNowPending || controllerOnline ? ST77XX_CYAN : 0x7BEF);
+  display.setCursor(160, 18);
+  display.printf("LINK %s", commandSource);
 
-  display.fillRect(10, 39, 220, 27, ST77XX_BLACK);
+  display.fillRect(10, 39, 140, 30, ST77XX_BLACK);
   display.setTextSize(2);
   display.setTextColor(accent);
   display.setCursor(12, 43);
   display.print(!controllerOnline ? "WAITING" : isolated ? "ISOLATED" : "NORMAL");
 
-  display.fillRect(12, 70, 216, 7, ST77XX_BLACK);
   const uint32_t age = controllerOnline ? min(millis() - lastCommandAt, kCommandWatchdogMs) :
                                           kCommandWatchdogMs;
-  const int ageWidth = map(age, 0, kCommandWatchdogMs, 0, 216);
-  display.drawRect(12, 70, 216, 7, 0x4208);
-  display.fillRect(12, 70, ageWidth, 7, accent);
-
-  display.fillRect(12, 80, 216, 15, ST77XX_BLACK);
-  display.setTextSize(1);
-  display.setTextColor(0xAD55);
-  display.setCursor(12, 82);
-  display.printf("CMD %4lums   SAFE 1.2s   #%lu", age, sequence);
-
-  display.fillRect(12, 97, 216, 12, ST77XX_BLACK);
-  display.drawFastHLine(12, 108, 216, 0x3186);
-  for (int x = 12; x < 228; x += 8) {
-    const int phase = (x / 8 + sequence) % 7;
-    const int height = phase == 0 ? 9 : phase == 1 ? 5 : 2;
-    display.drawFastVLine(x, 108 - height, height, accent);
+  static const int8_t ringX[] = {0, 8, 14, 16, 14, 8, 0, -8, -14, -16, -14, -8};
+  static const int8_t ringY[] = {-16, -14, -8, 0, 8, 14, 16, 14, 8, 0, -8, -14};
+  const uint8_t head = (millis() / kUiRefreshMs) % 12;
+  if (ringRedrawPending || previousRingAccent != accent) {
+    display.fillRect(160, 35, 68, 59, ST77XX_BLACK);
+    for (uint8_t i = 0; i < 12; ++i) {
+      display.fillCircle(194 + ringX[i], 59 + ringY[i], 2, 0x3186);
+    }
+    previousRingHead = -1;
+    previousRingAccent = accent;
+    ringRedrawPending = false;
   }
+  if (previousRingHead >= 0) {
+    display.fillCircle(194 + ringX[previousRingHead], 59 + ringY[previousRingHead], 3,
+                       ST77XX_BLACK);
+    display.fillCircle(194 + ringX[previousRingHead], 59 + ringY[previousRingHead], 2,
+                       0x3186);
+  }
+  display.fillCircle(194 + ringX[head], 59 + ringY[head], 3, accent);
+  previousRingHead = head;
+  display.fillRect(176, 53, 40, 11, ST77XX_BLACK);
+  display.setTextSize(1);
+  display.setTextColor(ST77XX_WHITE);
+  display.setCursor(age < 1000 ? 184 : 181, 56);
+  display.printf("%lums", age);
+
+  display.fillRect(12, 78, 140, 28, ST77XX_BLACK);
+  display.setTextColor(0xAD55);
+  display.setCursor(12, 81);
+  display.printf("SOURCE  %-5s", commandSource);
+  display.setCursor(12, 96);
+  display.printf("SEQ     %lu", sequence);
 }
 
 void drawStatus() {
   display.fillScreen(ST77XX_BLACK);
+  ringRedrawPending = true;
   display.fillRect(0, 0, 240, 6, statusColor());
   display.setTextWrap(false);
   display.setTextColor(ST77XX_WHITE);
@@ -138,6 +188,7 @@ void setIsolated(bool value) {
 void recoverSafe() {
   isolated = false;
   controllerOnline = false;
+  commandSource = "SAFE";
   digitalWrite(kRelayEnable, LOW);
   drawStatus();
   publish();
@@ -150,6 +201,7 @@ void processCommand(String command) {
     return;
   }
   lastCommandAt = millis();
+  commandSource = "BLE";
   if (command == "!RECOVER") {
     setIsolated(false);
     return;
@@ -159,6 +211,32 @@ void processCommand(String command) {
   if (separator < 0) return;
   if (command.substring(9, separator) != kChannelIds[PLEOS_PATH_INDEX]) return;
   setIsolated(command.substring(separator + 1) != "NORMAL");
+}
+
+void onEspNowReceive(const esp_now_recv_info_t *, const uint8_t *data, int length) {
+  if (length != sizeof(PathNowFrame)) return;
+  PathNowFrame frame;
+  memcpy(&frame, data, sizeof(frame));
+  if (frame.magic != kEspNowMagic || frame.version != 1) return;
+  const uint16_t expected = crc16(reinterpret_cast<const uint8_t *>(&frame),
+                                  sizeof(frame) - sizeof(frame.crc));
+  if (frame.crc != expected) return;
+  const uint32_t now = millis();
+  if (frame.sequence <= lastNowSequence && now - lastNowReceiveAt < kCommandWatchdogMs) return;
+  lastNowSequence = frame.sequence;
+  lastNowReceiveAt = now;
+  espNowIsolated = (frame.isolatedMask & (1U << PLEOS_PATH_INDEX)) != 0;
+  espNowPending = true;
+}
+
+void startEspNow() {
+  WiFi.mode(WIFI_STA);
+  esp_wifi_set_channel(kEspNowChannel, WIFI_SECOND_CHAN_NONE);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("!ESPNOW:INIT_FAILED");
+    return;
+  }
+  esp_now_register_recv_cb(onEspNowReceive);
 }
 
 class PathServerCallbacks final : public BLEServerCallbacks {
@@ -219,9 +297,13 @@ void pollButton(int pin, bool &wasHigh, uint32_t &changedAt, bool recover) {
   if (isHigh) return;
   lastCommandAt = millis();
   if (recover) {
+    manualOverrideUntil = millis() + kManualOverrideMs;
+    commandSource = "LOCAL";
     setIsolated(false);
     sendBleSnapshot("manual_recover");
   } else {
+    manualOverrideUntil = millis() + kManualOverrideMs;
+    commandSource = "LOCAL";
     setIsolated(!isolated);
     sendBleSnapshot(isolated ? "manual_inject" : "manual_normal");
   }
@@ -243,12 +325,19 @@ void setup() {
   display.init(135, 240);
   display.setRotation(1);
   recoverSafe();
+  startEspNow();
   startBle();
   Serial.printf("!NODE:%s:READY\n", kNodeIds[PLEOS_PATH_INDEX]);
 }
 
 void loop() {
   readCommands();
+  if (espNowPending && static_cast<int32_t>(millis() - manualOverrideUntil) >= 0) {
+    espNowPending = false;
+    lastCommandAt = millis();
+    commandSource = "NOW";
+    setIsolated(espNowIsolated);
+  }
   pollButton(kInjectButton, injectButtonHigh, injectButtonChangedAt, false);
   pollButton(kRecoverButton, recoverButtonHigh, recoverButtonChangedAt, true);
   if (bleSnapshotPending) {

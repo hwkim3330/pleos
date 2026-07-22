@@ -85,7 +85,7 @@ pair. The ESP32 connects only to the isolated module control header.
 
 ## Commands
 
-The Mac BLE bridge normally refreshes commands every second. For a serial
+The Mac BLE bridge normally refreshes commands every 250 ms. For a serial
 bench test at 115200 baud:
 
 ```text
@@ -97,3 +97,7 @@ bench test at 115200 baud:
 Use `tsn_front_b` for the Path2 firmware. A fault is never restored from
 flash after reboot. A command timeout, reset, or `!RECOVER` always selects
 normal pass-through.
+
+The 7-inch controller also broadcasts the two front-path states over ESP-NOW
+on Wi-Fi channel 6 every 250 ms. BLE and ESP-NOW share the same active-high
+relay contract; neither transport can bypass the local 1.2-second watchdog.

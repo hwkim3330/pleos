@@ -11,6 +11,7 @@
 ```text
 PLEOS Reconfig Studio <-> WebSocket <-> Mac BLE bridge
   <-> BLE GATT <-> 7-inch supervisor
+  <-> ESP-NOW channel 6 <-> Path1 / Path2 relay nodes
   (maintenance fallback: Mac bridge <-> USB framed CBOR)
   <-> USB hub/CDC <-> ESP-AB/AR/BR <-> three normally-closed relay PCBs
 ```
@@ -65,6 +66,20 @@ a disconnected bench harness before attaching Ethernet equipment.
 The Path1/Path2 fault-module wiring, fail-safe behavior, and commissioning
 procedure are documented in [FAULT_INJECTION_WIRING.md](FAULT_INJECTION_WIRING.md).
 
+## ESP-NOW backup link
+
+The 7-inch controller broadcasts a compact Path1/Path2 state frame every
+250 ms on Wi-Fi channel 6. Each frame contains a protocol magic value,
+sequence number, two isolation bits, and CRC-16. Path nodes accept either BLE
+or ESP-NOW; the newest valid command wins. If neither path refreshes within
+1.2 seconds, GPIO27 returns LOW and restores NC pass-through.
+
+ESP-NOW is a direct safety/demo fallback, not the application data plane. BLE
+continues to carry app state and events through the Mac bridge. Local button
+commands temporarily take priority for 1.2 seconds, after which network state
+resumes. Path firmware uses the `huge_app` partition because concurrent BLE,
+Wi-Fi/ESP-NOW, and display libraries exceed the default 1.3 MB app partition.
+
 ## 1.14-inch Path displays
 
 The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first board as Path1 and the second as Path2:
@@ -77,7 +92,7 @@ The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first bo
   /dev/cu.usbserial-XXXXXXXX PATH2
 ```
 
-Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for 1.2 seconds. The display refreshes command age, BLE state, sequence and a live activity trace every 200 ms.
+Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for 1.2 seconds. A circular heartbeat shows command age and uses the current state color without full-screen redraw. `SOURCE` identifies `BLE`, `NOW`, `LOCAL`, or fail-safe `SAFE` control.
 
 The two side buttons provide a hardware demo path: button 1 (`GPIO0`) toggles
 fault injection and button 2 (`GPIO35`) recovers immediately. The third button

@@ -4,7 +4,7 @@ set -eu
 SKETCH_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PORT=${1:?usage: $0 /dev/cu.usbserial-XXXX PATH1|PATH2}
 ROLE=${2:?usage: $0 /dev/cu.usbserial-XXXX PATH1|PATH2}
-FQBN='esp32:esp32:esp32:FlashSize=4M,PartitionScheme=default,UploadSpeed=115200'
+FQBN='esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,UploadSpeed=460800'
 
 case "$ROLE" in
   PATH1) INDEX=0 ;;

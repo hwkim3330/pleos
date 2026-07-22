@@ -3,7 +3,10 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <EspUsbHost.h>
+#include <WiFi.h>
 #include <esp_display_panel.hpp>
+#include <esp_now.h>
+#include <esp_wifi.h>
 #include <lvgl.h>
 
 #include "lvgl_v8_port.h"
@@ -14,6 +17,9 @@ namespace {
 
 constexpr uint8_t kProtocolVersion = 1;
 constexpr uint32_t kHeartbeatMs = 1000;
+constexpr uint32_t kEspNowPeriodMs = 250;
+constexpr uint8_t kEspNowChannel = 6;
+constexpr uint32_t kEspNowMagic = 0x504C454F;
 constexpr bool kPhysicalOutputsEnabled = false;
 constexpr char kBleDeviceName[] = "PLEOS-RECONFIG";
 constexpr char kBleServiceUuid[] = "7d2f0001-7c7a-4f7b-9b51-0af9a281d110";
@@ -59,6 +65,16 @@ bool lastRenderedIoNodeConnected = false;
 BLECharacteristic *bleControl = nullptr;
 volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
+uint32_t lastEspNowAt = 0;
+uint32_t espNowSequence = 0;
+
+struct __attribute__((packed)) PathNowFrame {
+  uint32_t magic;
+  uint32_t sequence;
+  uint8_t version;
+  uint8_t isolatedMask;
+  uint16_t crc;
+};
 
 void publishBleState(const char *eventType, bool fullSnapshot);
 
@@ -144,6 +160,29 @@ uint16_t crc16(const uint8_t *data, size_t length) {
   return crc;
 }
 
+void startEspNow() {
+  WiFi.mode(WIFI_STA);
+  esp_wifi_set_channel(kEspNowChannel, WIFI_SECOND_CHAN_NONE);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("!ESPNOW:INIT_FAILED");
+    return;
+  }
+  esp_now_peer_info_t peer{};
+  memset(peer.peer_addr, 0xFF, ESP_NOW_ETH_ALEN);
+  peer.channel = kEspNowChannel;
+  peer.encrypt = false;
+  if (esp_now_add_peer(&peer) != ESP_OK) Serial.println("!ESPNOW:PEER_FAILED");
+}
+
+void sendEspNowState() {
+  PathNowFrame frame{kEspNowMagic, ++espNowSequence, kProtocolVersion, 0, 0};
+  if (channels[0].health != Health::healthy) frame.isolatedMask |= 0x01;
+  if (channels[1].health != Health::healthy) frame.isolatedMask |= 0x02;
+  frame.crc = crc16(reinterpret_cast<const uint8_t *>(&frame), sizeof(frame) - sizeof(frame.crc));
+  static const uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  esp_now_send(broadcast, reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
+}
+
 void sendState(const char *eventType, const char *channelId = "") {
   if (xSemaphoreTake(frameMutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
   BufferPrint payload;
@@ -208,10 +247,10 @@ void refreshUi() {
   lv_obj_set_style_text_color(modeLabel, lv_color_hex(!strcmp(effectiveMode, "MRM") ? 0xFF6A61 : 0x66D6B1), 0);
   lv_label_set_text(eventLabel, lastEvent);
   lv_label_set_text(linkLabel, ioNodeConnected
-                                   ? (bleConnected ? "BLE APP  ONLINE   |   I/O NODE  ONLINE"
-                                                   : "BLE APP  WAITING  |   I/O NODE  ONLINE")
-                                   : (bleConnected ? "BLE APP  ONLINE   |   I/O NODE  OFFLINE"
-                                                   : "BLE APP  WAITING  |   I/O NODE  OFFLINE"));
+                                   ? (bleConnected ? "BLE ONLINE  |  NOW TX  |  I/O ONLINE"
+                                                   : "BLE WAITING |  NOW TX  |  I/O ONLINE")
+                                   : (bleConnected ? "BLE ONLINE  |  NOW TX  |  I/O OFFLINE"
+                                                   : "BLE WAITING |  NOW TX  |  I/O OFFLINE"));
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(ioNodeConnected ? 0x66D6B1 : 0x92A0A5), 0);
 }
 
@@ -464,7 +503,7 @@ void createUi() {
   makeCard(screen, channels[8], 412, 260, 370);
 
   auto *hint = lv_label_create(screen);
-  lv_label_set_text(hint, "Tap a channel to inject/recover. Physical relay outputs are locked.");
+  lv_label_set_text(hint, "Tap channel to inject/recover  |  ESP-NOW path relay link armed");
   lv_obj_set_style_text_color(hint, lv_color_hex(0x89959A), 0);
   lv_obj_set_pos(hint, 19, 349);
   makeScenario(screen, "LiDAR FL LOSS", 18, 1, 0x345F79);
@@ -485,6 +524,7 @@ void setup() {
   usbHost.onDeviceDisconnected([](const EspUsbHostDeviceInfo &) { ioNodeConnected = false; });
   ioNodeSerial.begin(115200);
   usbHost.begin();
+  startEspNow();
   startBle();
   auto *board = new Board();
   board->init();
@@ -525,6 +565,10 @@ void loop() {
     sendState(ioNodeConnected ? "io_node_connected" : "io_node_disconnected");
   }
   const uint32_t now = millis();
+  if (now - lastEspNowAt >= kEspNowPeriodMs) {
+    lastEspNowAt = now;
+    sendEspNowState();
+  }
   if (now - lastHeartbeat >= kHeartbeatMs) {
     lastHeartbeat = now;
     for (const auto &channel : channels) {
