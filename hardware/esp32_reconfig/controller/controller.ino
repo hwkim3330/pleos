@@ -17,8 +17,10 @@ namespace {
 
 constexpr uint8_t kProtocolVersion = 1;
 constexpr uint32_t kHeartbeatMs = 1000;
-constexpr uint32_t kEspNowPeriodMs = 100;
-constexpr uint32_t kPathAckTimeoutMs = 5000;
+constexpr uint32_t kEspNowPeriodMs = 200;
+constexpr uint32_t kEspNowUrgentPeriodMs = 20;
+constexpr uint32_t kEspNowDiscoveryMs = 500;
+constexpr uint32_t kPathAckTimeoutMs = 10000;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
 constexpr uint32_t kPathAckMagic = 0x5041434B;
@@ -76,6 +78,7 @@ volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
 uint32_t lastEspNowAt = 0;
 uint32_t lastEspNowDiscoveryAt = 0;
+volatile uint8_t urgentEspNowFrames = 0;
 uint32_t espNowSequence = 0;
 uint32_t lastPulseAt = 0;
 volatile uint32_t pathAckAt[2] = {0, 0};
@@ -236,7 +239,7 @@ void sendEspNowState() {
       esp_now_send(kPathNodeMacs[index], reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
     }
   }
-  if (now - lastEspNowDiscoveryAt >= 1000) {
+  if (now - lastEspNowDiscoveryAt >= kEspNowDiscoveryMs) {
     lastEspNowDiscoveryAt = now;
     static const uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     esp_now_send(broadcast, reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
@@ -244,6 +247,9 @@ void sendEspNowState() {
 }
 
 void sendState(const char *eventType, const char *channelId = "") {
+  if (strcmp(eventType, "heartbeat") != 0 && strcmp(eventType, "path_ack") != 0) {
+    urgentEspNowFrames = 3;
+  }
   if (xSemaphoreTake(frameMutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
   BufferPrint payload;
   CborWriter writer(payload);
@@ -827,9 +833,12 @@ void loop() {
     lv_label_set_text_fmt(heartbeatLabel, "NOW LIVE #%lu", espNowSequence);
     lvgl_port_unlock();
   }
-  if (now - lastEspNowAt >= kEspNowPeriodMs) {
+  const uint32_t espNowPeriod = urgentEspNowFrames > 0 ?
+      kEspNowUrgentPeriodMs : kEspNowPeriodMs;
+  if (now - lastEspNowAt >= espNowPeriod) {
     lastEspNowAt = now;
     sendEspNowState();
+    if (urgentEspNowFrames > 0) --urgentEspNowFrames;
   }
   if (now - lastHeartbeat >= kHeartbeatMs) {
     lastHeartbeat = now;

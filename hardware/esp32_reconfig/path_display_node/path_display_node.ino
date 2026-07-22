@@ -26,7 +26,7 @@ constexpr int kRecoverButton = 35;
 // T-Display GPIO27 -> fault-injection PCB RELAY_EN (J3.3).
 // LOW keeps the NC Ethernet path closed; HIGH injects a link fault.
 constexpr int kRelayEnable = 27;
-constexpr uint32_t kCommandWatchdogMs = 3000;
+constexpr uint32_t kCommandWatchdogMs = 10000;
 constexpr uint32_t kHeartbeatMs = 1000;
 constexpr uint32_t kAckPeriodMs = 600 + (PLEOS_PATH_INDEX * 250);
 constexpr uint32_t kUiRefreshMs = 200;
