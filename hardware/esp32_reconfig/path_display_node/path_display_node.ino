@@ -21,8 +21,8 @@ constexpr int kTftCs = 5;
 constexpr int kTftDc = 16;
 constexpr int kTftReset = 23;
 constexpr int kTftBacklight = 4;
-constexpr int kInjectButton = 0;
-constexpr int kRecoverButton = 35;
+constexpr int kInjectButton = 35;
+constexpr int kRecoverButton = 0;
 // T-Display GPIO27 -> fault-injection PCB RELAY_EN (J3.3).
 // LOW keeps the NC Ethernet path closed; HIGH injects a link fault.
 constexpr int kRelayEnable = 27;
@@ -131,33 +131,33 @@ void drawLiveMetrics() {
   const uint8_t head = (millis() / kUiRefreshMs) % 16;
   if (ringRedrawPending || previousRingAccent != accent) {
     for (uint8_t i = 0; i < 16; ++i) {
-      display.fillCircle(120 + ringX[i], 65 + ringY[i], 2, 0x2945);
+      display.fillCircle(145 + ringX[i], 67 + ringY[i], 2, 0x2945);
     }
     previousRingHead = -1;
     previousRingAccent = accent;
     ringRedrawPending = false;
   }
   if (previousRingHead >= 0) {
-    display.fillCircle(120 + ringX[previousRingHead], 65 + ringY[previousRingHead], 3,
+    display.fillCircle(145 + ringX[previousRingHead], 67 + ringY[previousRingHead], 3,
                        ST77XX_BLACK);
-    display.fillCircle(120 + ringX[previousRingHead], 65 + ringY[previousRingHead], 2,
+    display.fillCircle(145 + ringX[previousRingHead], 67 + ringY[previousRingHead], 2,
                        0x2945);
   }
-  display.fillCircle(120 + ringX[head], 65 + ringY[head], 3, accent);
+  display.fillCircle(145 + ringX[head], 67 + ringY[head], 3, accent);
   previousRingHead = head;
 
-  display.fillRect(87, 52, 66, 26, ST77XX_BLACK);
+  display.fillRect(112, 54, 66, 26, ST77XX_BLACK);
   const char *state = !controllerOnline ? "WAIT" : isolated ? "FAULT" : "READY";
-  printCentered(state, 120, 56, 2, accent);
+  printCentered(state, 145, 58, 2, accent);
 
-  display.fillRect(50, 105, 140, 22, ST77XX_BLACK);
+  display.fillRect(62, 108, 166, 19, ST77XX_BLACK);
   char footer[40];
   snprintf(footer, sizeof(footer), "%s  |  %lums  |  #%lu", commandSource, age, sequence);
-  printCentered(footer, 120, 111, 1, 0x9CF3);
+  printCentered(footer, 145, 112, 1, 0x9CF3);
 
-  display.fillRect(0, 42, 3, 48,
+  display.fillRect(0, 20, 3, 42,
                    localInjectActive ? ST77XX_RED : !injectButtonHigh ? ST77XX_ORANGE : 0x4208);
-  display.fillRect(237, 42, 3, 48, isolated ? 0x4208 : ST77XX_GREEN);
+  display.fillRect(0, 75, 3, 42, isolated ? 0x4208 : ST77XX_GREEN);
 }
 
 void drawShell() {
@@ -166,19 +166,22 @@ void drawShell() {
   display.setTextWrap(false);
   display.setTextSize(1);
   display.setTextColor(0xBDF7);
-  display.setCursor(9, 10);
+  display.setCursor(58, 10);
   display.printf("PLEOS  /  %s", kPathNames[PLEOS_PATH_INDEX]);
   display.setTextColor(0x5AEB);
-  display.setCursor(164, 10);
+  display.setCursor(174, 10);
   display.print(kChannelIds[PLEOS_PATH_INDEX]);
-  display.setTextColor(0x8410);
-  display.setCursor(7, 60);
+  display.drawFastVLine(48, 17, 104, 0x2104);
+  display.drawFastHLine(6, 68, 35, 0x2104);
+  display.setTextColor(0x9CF3);
+  display.setCursor(8, 31);
   display.print("HOLD");
-  display.setCursor(7, 72);
+  display.setCursor(8, 43);
   display.print("FAULT");
-  display.setCursor(202, 60);
+  display.setTextColor(0x7BEF);
+  display.setCursor(8, 86);
   display.print("PRESS");
-  display.setCursor(202, 72);
+  display.setCursor(8, 98);
   display.print("SAFE");
   drawLiveMetrics();
 }
@@ -367,8 +370,8 @@ void setup() {
   digitalWrite(kRelayEnable, LOW);
   pinMode(kRelayEnable, OUTPUT);
   digitalWrite(kRelayEnable, LOW);
-  pinMode(kInjectButton, INPUT_PULLUP);
-  pinMode(kRecoverButton, INPUT);
+  pinMode(kInjectButton, INPUT);
+  pinMode(kRecoverButton, INPUT_PULLUP);
   Serial.begin(115200);
   pinMode(kTftBacklight, OUTPUT);
   digitalWrite(kTftBacklight, HIGH);
