@@ -18,6 +18,9 @@ constexpr int kTftCs = 5;
 constexpr int kTftDc = 16;
 constexpr int kTftReset = 23;
 constexpr int kTftBacklight = 4;
+// T-Display GPIO27 -> fault-injection PCB RELAY_EN (J3.3).
+// LOW keeps the NC Ethernet path closed; HIGH injects a link fault.
+constexpr int kRelayEnable = 27;
 constexpr uint32_t kCommandWatchdogMs = 5000;
 constexpr uint32_t kHeartbeatMs = 1000;
 constexpr const char *kPathNames[] = {"PATH 1", "PATH 2"};
@@ -87,6 +90,7 @@ void setIsolated(bool value) {
   if (isolated == value && controllerOnline) return;
   isolated = value;
   controllerOnline = true;
+  digitalWrite(kRelayEnable, isolated ? HIGH : LOW);
   drawStatus();
   publish();
 }
@@ -94,6 +98,7 @@ void setIsolated(bool value) {
 void recoverSafe() {
   isolated = false;
   controllerOnline = false;
+  digitalWrite(kRelayEnable, LOW);
   drawStatus();
   publish();
 }
@@ -169,6 +174,10 @@ void readCommands() {
 }  // namespace
 
 void setup() {
+  // Establish pass-through before display, serial, or BLE initialization.
+  digitalWrite(kRelayEnable, LOW);
+  pinMode(kRelayEnable, OUTPUT);
+  digitalWrite(kRelayEnable, LOW);
   Serial.begin(115200);
   pinMode(kTftBacklight, OUTPUT);
   digitalWrite(kTftBacklight, HIGH);

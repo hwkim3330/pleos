@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | `controller` | 7-inch touch supervisor, BLE GATT and CBOR maintenance link | No |
 | `inline_injector` | Flash ESP-AB, ESP-AR and ESP-BR between each switch pair | Locked by default |
-| `path_display_node` | 1.14-inch non-touch Path1/Path2 status and inline watchdog node | Locked by default |
+| `path_display_node` | 1.14-inch Path1/Path2 display, BLE watchdog and GPIO27 relay control | Enabled, active-high |
 | `io_node` | Expandable sensor switch inputs and relay outputs | Locked by default |
 | `bridge` | macOS serial-CBOR to WebSocket gateway | No |
 
@@ -54,7 +54,13 @@ The ESP32 must never be wired directly into an automotive Ethernet differential 
 | `gnss` | GNSS availability/quality input |
 | `camera` | Front camera availability input |
 
-Physical outputs remain disabled until the board schematic and active levels are entered in the firmware and verified on a disconnected bench harness.
+The generic `inline_injector` and `io_node` outputs remain disabled until their
+board-specific pin maps are verified. The two Path display nodes implement the
+confirmed active-high `J3.3 / RELAY_EN` contract on GPIO27; commission them on
+a disconnected bench harness before attaching Ethernet equipment.
+
+The Path1/Path2 fault-module wiring, fail-safe behavior, and commissioning
+procedure are documented in [FAULT_INJECTION_WIRING.md](FAULT_INJECTION_WIRING.md).
 
 ## 1.14-inch Path displays
 
@@ -69,6 +75,11 @@ The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first bo
 ```
 
 Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for five seconds.
+
+Each Path node drives its Fault Injection Module from `GPIO27` to
+`J3.3 / RELAY_EN`: LOW is normal NC pass-through and HIGH is an injected
+fault. Add an external 10 kohm pull-down at `RELAY_EN` so the hardware also
+defaults to pass-through while the ESP32 is resetting or disconnected.
 
 Both nodes advertise BLE independently:
 
