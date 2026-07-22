@@ -4,6 +4,7 @@
 | --- | --- | --- |
 | `controller` | 7-inch touch supervisor, BLE GATT and CBOR maintenance link | No |
 | `inline_injector` | Flash ESP-AB, ESP-AR and ESP-BR between each switch pair | Locked by default |
+| `path_display_node` | 1.14-inch non-touch Path1/Path2 status and inline watchdog node | Locked by default |
 | `io_node` | Expandable sensor switch inputs and relay outputs | Locked by default |
 | `bridge` | macOS serial-CBOR to WebSocket gateway | No |
 
@@ -54,5 +55,19 @@ The ESP32 must never be wired directly into an automotive Ethernet differential 
 | `camera` | Front camera availability input |
 
 Physical outputs remain disabled until the board schematic and active levels are entered in the firmware and verified on a disconnected bench harness.
+
+## 1.14-inch Path displays
+
+The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first board as Path1 and the second as Path2:
+
+```bash
+./hardware/esp32_reconfig/path_display_node/build_and_flash.sh \
+  /dev/cu.usbserial-XXXXXXXX PATH1
+
+./hardware/esp32_reconfig/path_display_node/build_and_flash.sh \
+  /dev/cu.usbserial-XXXXXXXX PATH2
+```
+
+Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for five seconds.
 
 Build three firmware variants with `AR`, `BR`, or `AB`. ESP-AB sits between the two front switches, ESP-AR between front A and rear R, and ESP-BR between front B and rear R. Each board ignores commands for the other two links.
