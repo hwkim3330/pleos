@@ -628,10 +628,11 @@ lv_obj_t *makeCard(lv_obj_t *parent, Channel &channel, int x, int y, int width) 
   auto *button = lv_btn_create(parent);
   lv_obj_set_pos(button, x, y);
   lv_obj_set_size(button, width, 66);
-  lv_obj_set_style_radius(button, 5, 0);
+  lv_obj_set_style_radius(button, 4, 0);
   lv_obj_set_style_shadow_width(button, 0, 0);
-  lv_obj_set_style_bg_color(button, lv_color_hex(0x182126), 0);
-  lv_obj_set_style_border_width(button, 2, 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x151A1D), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x20282C), LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(button, 1, 0);
   lv_obj_set_style_border_color(button, lv_color_hex(healthColor(channel.health)), 0);
   lv_obj_add_event_cb(button, channelPressed, LV_EVENT_CLICKED, &channel);
   auto *title = lv_label_create(button);
@@ -665,15 +666,19 @@ void makePathAction(lv_obj_t *parent, const char *text, int x, int y, int width,
                     intptr_t action, uint32_t color) {
   auto *button = lv_btn_create(parent);
   lv_obj_set_pos(button, x, y);
-  lv_obj_set_size(button, width, 58);
-  lv_obj_set_style_radius(button, 5, 0);
+  lv_obj_set_size(button, width, 76);
+  lv_obj_set_style_radius(button, 4, 0);
   lv_obj_set_style_shadow_width(button, 0, 0);
-  lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x181E21), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x242D31), LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(button, 1, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(color), 0);
   lv_obj_add_event_cb(button, pathActionPressed, LV_EVENT_CLICKED,
                       reinterpret_cast<void *>(action));
   auto *label = lv_label_create(button);
   lv_label_set_text(label, text);
   lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
   lv_obj_center(label);
 }
 
@@ -684,12 +689,16 @@ void makeSensorAction(lv_obj_t *parent, const char *text, int x, int y,
   lv_obj_set_size(button, 226, 54);
   lv_obj_set_style_radius(button, 5, 0);
   lv_obj_set_style_shadow_width(button, 0, 0);
-  lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x181E21), 0);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x242D31), LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(button, 1, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(color), 0);
   lv_obj_add_event_cb(button, sensorActionPressed, LV_EVENT_CLICKED,
                       reinterpret_cast<void *>(action));
   auto *label = lv_label_create(button);
   lv_label_set_text(label, text);
   lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
   lv_obj_center(label);
 }
 
@@ -699,8 +708,8 @@ void createUi() {
   lv_obj_set_style_text_color(screen, lv_color_hex(0xF4F7F7), 0);
 
   auto *title = lv_label_create(screen);
-  lv_label_set_text(title, "PLEOS NETWORK RECONFIG");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_label_set_text(title, "PLEOS RECONFIG");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
   lv_obj_set_pos(title, 18, 15);
   modeLabel = lv_label_create(screen);
   lv_obj_set_style_text_font(modeLabel, &lv_font_montserrat_16, 0);
@@ -716,7 +725,7 @@ void createUi() {
   lv_obj_set_style_bg_color(heartbeatDot, lv_color_hex(0x66D6B1), 0);
   lv_obj_clear_flag(heartbeatDot, LV_OBJ_FLAG_SCROLLABLE);
   heartbeatLabel = lv_label_create(screen);
-  lv_label_set_text(heartbeatLabel, "NOW LIVE #0");
+  lv_label_set_text(heartbeatLabel, "ESP-NOW  #0");
   lv_obj_set_style_text_color(heartbeatLabel, lv_color_hex(0x92A0A5), 0);
   lv_obj_set_pos(heartbeatLabel, 399, 57);
   linkLabel = lv_label_create(screen);
@@ -740,6 +749,11 @@ void createUi() {
   lv_obj_set_size(tabs, 764, 210);
   lv_obj_set_style_bg_color(tabs, lv_color_hex(0x11181C), 0);
   lv_obj_set_style_border_width(tabs, 0, 0);
+  auto *tabButtons = lv_tabview_get_tab_btns(tabs);
+  lv_obj_set_style_bg_color(tabButtons, lv_color_hex(0x0B0F11), 0);
+  lv_obj_set_style_text_color(tabButtons, lv_color_hex(0x7F8B91), 0);
+  lv_obj_set_style_text_color(tabButtons, lv_color_hex(0xF4F7F7), LV_STATE_CHECKED);
+  lv_obj_set_style_border_width(tabButtons, 0, 0);
   auto *networkTab = lv_tabview_add_tab(tabs, "NETWORK");
   auto *sensorTab = lv_tabview_add_tab(tabs, "SENSORS");
   lv_obj_set_style_bg_color(networkTab, lv_color_hex(0x11181C), 0);
@@ -747,12 +761,9 @@ void createUi() {
   lv_obj_set_style_pad_all(networkTab, 8, 0);
   lv_obj_set_style_pad_all(sensorTab, 8, 0);
 
-  makePathAction(networkTab, "PATH 1 LINK DOWN", 0, 4, 226, 1, 0x263942);
-  makePathAction(networkTab, "PATH 2 LINK DOWN", 244, 4, 226, 2, 0x263942);
-  makePathAction(networkTab, "PATH 3 LINK DOWN", 488, 4, 226, 3, 0xA66B17);
-  makePathAction(networkTab, "FRONT SWITCH A", 0, 66, 226, 4, 0x7E3030);
-  makePathAction(networkTab, "FRONT SWITCH B", 244, 66, 226, 5, 0x7E3030);
-  makePathAction(networkTab, "REAR SWITCH", 488, 66, 226, 6, 0x7E3030);
+  makePathAction(networkTab, "FRONT SWITCH A", 0, 26, 226, 4, 0xE56C65);
+  makePathAction(networkTab, "FRONT SWITCH B", 244, 26, 226, 5, 0xE56C65);
+  makePathAction(networkTab, "REAR SWITCH", 488, 26, 226, 6, 0xE56C65);
 
   makeSensorAction(sensorTab, "LIDAR FRONT LEFT", 0, 4, 0, 0x315E87);
   makeSensorAction(sensorTab, "LIDAR FRONT RIGHT", 244, 4, 1, 0x315E87);
@@ -761,7 +772,7 @@ void createUi() {
   makeSensorAction(sensorTab, "GNSS LOSS", 244, 66, 4, 0x6C4A7E);
   makeSensorAction(sensorTab, "DUAL SENSOR", 488, 66, 5, 0x7E5A30);
 
-  makePathAction(screen, "RECOVER ALL", 18, 410, 764, 7, 0x177C62);
+  makePathAction(screen, "RECOVER ALL", 18, 400, 764, 7, 0x66D6B1);
   refreshUi();
 }
 
@@ -824,13 +835,11 @@ void loop() {
     sendState(ioNodeConnected ? "io_node_connected" : "io_node_disconnected");
   }
   const uint32_t now = millis();
-  if (heartbeatDot != nullptr && now - lastPulseAt >= 250) {
+  if (heartbeatDot != nullptr && now - lastPulseAt >= 500) {
     lastPulseAt = now;
     lvgl_port_lock(-1);
-    const bool bright = ((now / 250) % 2) == 0;
-    lv_obj_set_style_bg_color(heartbeatDot,
-                              lv_color_hex(bright ? 0x66D6B1 : 0x21443A), 0);
-    lv_label_set_text_fmt(heartbeatLabel, "NOW LIVE #%lu", espNowSequence);
+    lv_obj_set_style_bg_color(heartbeatDot, lv_color_hex(0x66D6B1), 0);
+    lv_label_set_text_fmt(heartbeatLabel, "ESP-NOW  #%lu", espNowSequence);
     lvgl_port_unlock();
   }
   const uint32_t espNowPeriod = urgentEspNowFrames > 0 ?
