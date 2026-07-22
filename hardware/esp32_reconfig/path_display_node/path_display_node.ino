@@ -30,6 +30,7 @@ constexpr uint32_t kCommandWatchdogMs = 1200;
 constexpr uint32_t kHeartbeatMs = 1000;
 constexpr uint32_t kUiRefreshMs = 200;
 constexpr uint32_t kButtonDebounceMs = 40;
+constexpr uint32_t kInjectHoldMs = 600;
 constexpr uint32_t kManualOverrideMs = 1200;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
@@ -53,6 +54,8 @@ bool recoverButtonHigh = true;
 uint32_t injectButtonChangedAt = 0;
 uint32_t recoverButtonChangedAt = 0;
 uint32_t manualOverrideUntil = 0;
+uint32_t injectPressedAt = 0;
+bool localInjectActive = false;
 uint32_t lastNowSequence = 0;
 uint32_t lastNowReceiveAt = 0;
 volatile bool espNowPending = false;
@@ -61,6 +64,7 @@ const char *commandSource = "SAFE";
 int8_t previousRingHead = -1;
 uint16_t previousRingAccent = 0;
 bool ringRedrawPending = true;
+volatile int8_t pendingBleCommand = -1;
 BLECharacteristic *bleControl = nullptr;
 volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
@@ -105,68 +109,77 @@ uint16_t statusColor() {
   return !controllerOnline ? ST77XX_ORANGE : isolated ? ST77XX_RED : ST77XX_GREEN;
 }
 
+void printCentered(const char *text, int16_t centerX, int16_t baselineY, uint8_t size,
+                   uint16_t color) {
+  int16_t x, y;
+  uint16_t width, height;
+  display.setTextSize(size);
+  display.getTextBounds(text, 0, baselineY, &x, &y, &width, &height);
+  display.setTextColor(color);
+  display.setCursor(centerX - width / 2, baselineY);
+  display.print(text);
+}
+
 void drawLiveMetrics() {
   const uint16_t accent = statusColor();
-  display.fillRect(157, 12, 81, 14, ST77XX_BLACK);
-  display.setTextSize(1);
-  display.setTextColor(espNowPending || controllerOnline ? ST77XX_CYAN : 0x7BEF);
-  display.setCursor(160, 18);
-  display.printf("LINK %s", commandSource);
-
-  display.fillRect(10, 39, 140, 30, ST77XX_BLACK);
-  display.setTextSize(2);
-  display.setTextColor(accent);
-  display.setCursor(12, 43);
-  display.print(!controllerOnline ? "WAITING" : isolated ? "ISOLATED" : "NORMAL");
-
   const uint32_t age = controllerOnline ? min(millis() - lastCommandAt, kCommandWatchdogMs) :
                                           kCommandWatchdogMs;
-  static const int8_t ringX[] = {0, 8, 14, 16, 14, 8, 0, -8, -14, -16, -14, -8};
-  static const int8_t ringY[] = {-16, -14, -8, 0, 8, 14, 16, 14, 8, 0, -8, -14};
-  const uint8_t head = (millis() / kUiRefreshMs) % 12;
+  static const int8_t ringX[] = {0, 11, 21, 27, 29, 27, 21, 11,
+                                  0, -11, -21, -27, -29, -27, -21, -11};
+  static const int8_t ringY[] = {-29, -27, -21, -11, 0, 11, 21, 27,
+                                  29, 27, 21, 11, 0, -11, -21, -27};
+  const uint8_t head = (millis() / kUiRefreshMs) % 16;
   if (ringRedrawPending || previousRingAccent != accent) {
-    display.fillRect(160, 35, 68, 59, ST77XX_BLACK);
-    for (uint8_t i = 0; i < 12; ++i) {
-      display.fillCircle(194 + ringX[i], 59 + ringY[i], 2, 0x3186);
+    for (uint8_t i = 0; i < 16; ++i) {
+      display.fillCircle(120 + ringX[i], 65 + ringY[i], 2, 0x2945);
     }
     previousRingHead = -1;
     previousRingAccent = accent;
     ringRedrawPending = false;
   }
   if (previousRingHead >= 0) {
-    display.fillCircle(194 + ringX[previousRingHead], 59 + ringY[previousRingHead], 3,
+    display.fillCircle(120 + ringX[previousRingHead], 65 + ringY[previousRingHead], 3,
                        ST77XX_BLACK);
-    display.fillCircle(194 + ringX[previousRingHead], 59 + ringY[previousRingHead], 2,
-                       0x3186);
+    display.fillCircle(120 + ringX[previousRingHead], 65 + ringY[previousRingHead], 2,
+                       0x2945);
   }
-  display.fillCircle(194 + ringX[head], 59 + ringY[head], 3, accent);
+  display.fillCircle(120 + ringX[head], 65 + ringY[head], 3, accent);
   previousRingHead = head;
-  display.fillRect(176, 53, 40, 11, ST77XX_BLACK);
-  display.setTextSize(1);
-  display.setTextColor(ST77XX_WHITE);
-  display.setCursor(age < 1000 ? 184 : 181, 56);
-  display.printf("%lums", age);
 
-  display.fillRect(12, 78, 140, 28, ST77XX_BLACK);
-  display.setTextColor(0xAD55);
-  display.setCursor(12, 81);
-  display.printf("SOURCE  %-5s", commandSource);
-  display.setCursor(12, 96);
-  display.printf("SEQ     %lu", sequence);
+  display.fillRect(87, 52, 66, 26, ST77XX_BLACK);
+  const char *state = !controllerOnline ? "WAIT" : isolated ? "FAULT" : "READY";
+  printCentered(state, 120, 56, 2, accent);
+
+  display.fillRect(50, 105, 140, 22, ST77XX_BLACK);
+  char footer[40];
+  snprintf(footer, sizeof(footer), "%s  |  %lums  |  #%lu", commandSource, age, sequence);
+  printCentered(footer, 120, 111, 1, 0x9CF3);
+
+  display.fillRect(0, 42, 3, 48,
+                   localInjectActive ? ST77XX_RED : !injectButtonHigh ? ST77XX_ORANGE : 0x4208);
+  display.fillRect(237, 42, 3, 48, isolated ? 0x4208 : ST77XX_GREEN);
 }
 
-void drawStatus() {
+void drawShell() {
   display.fillScreen(ST77XX_BLACK);
   ringRedrawPending = true;
-  display.fillRect(0, 0, 240, 6, statusColor());
   display.setTextWrap(false);
-  display.setTextColor(ST77XX_WHITE);
-  display.setTextSize(2);
-  display.setCursor(12, 15);
-  display.print(kPathNames[PLEOS_PATH_INDEX]);
-  display.setTextColor(0x7BEF);
-  display.setCursor(12, 119);
-  display.print("BTN1 INJECT     BTN2 RECOVER");
+  display.setTextSize(1);
+  display.setTextColor(0xBDF7);
+  display.setCursor(9, 10);
+  display.printf("PLEOS  /  %s", kPathNames[PLEOS_PATH_INDEX]);
+  display.setTextColor(0x5AEB);
+  display.setCursor(164, 10);
+  display.print(kChannelIds[PLEOS_PATH_INDEX]);
+  display.setTextColor(0x8410);
+  display.setCursor(7, 60);
+  display.print("HOLD");
+  display.setCursor(7, 72);
+  display.print("FAULT");
+  display.setCursor(202, 60);
+  display.print("PRESS");
+  display.setCursor(202, 72);
+  display.print("SAFE");
   drawLiveMetrics();
 }
 
@@ -181,7 +194,8 @@ void setIsolated(bool value) {
   isolated = value;
   controllerOnline = true;
   digitalWrite(kRelayEnable, isolated ? HIGH : LOW);
-  drawStatus();
+  ringRedrawPending = true;
+  drawLiveMetrics();
   publish();
 }
 
@@ -190,7 +204,8 @@ void recoverSafe() {
   controllerOnline = false;
   commandSource = "SAFE";
   digitalWrite(kRelayEnable, LOW);
-  drawStatus();
+  ringRedrawPending = true;
+  drawLiveMetrics();
   publish();
 }
 
@@ -253,7 +268,18 @@ class PathServerCallbacks final : public BLEServerCallbacks {
 
 class PathControlCallbacks final : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
-    processCommand(characteristic->getValue());
+    String command = characteristic->getValue();
+    command.trim();
+    if (command == "!SYNC") {
+      pendingBleCommand = 2;
+    } else if (command == "!RECOVER") {
+      pendingBleCommand = 0;
+    } else if (command.startsWith("!CHANNEL:")) {
+      const int separator = command.indexOf(':', 9);
+      if (separator >= 0 && command.substring(9, separator) == kChannelIds[PLEOS_PATH_INDEX]) {
+        pendingBleCommand = command.substring(separator + 1) == "NORMAL" ? 0 : 1;
+      }
+    }
   }
 };
 
@@ -289,23 +315,48 @@ void readCommands() {
   }
 }
 
-void pollButton(int pin, bool &wasHigh, uint32_t &changedAt, bool recover) {
-  const bool isHigh = digitalRead(pin) != LOW;
-  if (isHigh == wasHigh || millis() - changedAt < kButtonDebounceMs) return;
-  wasHigh = isHigh;
-  changedAt = millis();
-  if (isHigh) return;
-  lastCommandAt = millis();
-  if (recover) {
-    manualOverrideUntil = millis() + kManualOverrideMs;
+void pollButtons() {
+  const uint32_t now = millis();
+  const bool injectHigh = digitalRead(kInjectButton) != LOW;
+  if (injectHigh != injectButtonHigh && now - injectButtonChangedAt >= kButtonDebounceMs) {
+    injectButtonHigh = injectHigh;
+    injectButtonChangedAt = now;
+    if (!injectHigh) {
+      injectPressedAt = now;
+    } else {
+      if (localInjectActive) {
+        localInjectActive = false;
+        manualOverrideUntil = now + kManualOverrideMs;
+        lastCommandAt = now;
+        commandSource = "LOCAL";
+        setIsolated(false);
+        sendBleSnapshot("manual_release");
+      }
+    }
+  }
+  if (!injectButtonHigh && !localInjectActive && now - injectPressedAt >= kInjectHoldMs) {
+    localInjectActive = true;
     commandSource = "LOCAL";
-    setIsolated(false);
-    sendBleSnapshot("manual_recover");
-  } else {
-    manualOverrideUntil = millis() + kManualOverrideMs;
-    commandSource = "LOCAL";
-    setIsolated(!isolated);
-    sendBleSnapshot(isolated ? "manual_inject" : "manual_normal");
+    setIsolated(true);
+    sendBleSnapshot("manual_hold");
+  }
+  if (localInjectActive) {
+    manualOverrideUntil = now + kManualOverrideMs;
+    lastCommandAt = now;
+  }
+
+  const bool recoverHigh = digitalRead(kRecoverButton) != LOW;
+  if (recoverHigh != recoverButtonHigh && now - recoverButtonChangedAt >= kButtonDebounceMs) {
+    recoverButtonHigh = recoverHigh;
+    recoverButtonChangedAt = now;
+    if (!recoverHigh) {
+      localInjectActive = false;
+      manualOverrideUntil = now + kManualOverrideMs;
+      lastCommandAt = now;
+      commandSource = "LOCAL";
+      setIsolated(false);
+      sendBleSnapshot("manual_recover");
+    }
   }
 }
 
@@ -324,6 +375,7 @@ void setup() {
   SPI.begin(18, -1, 19, kTftCs);
   display.init(135, 240);
   display.setRotation(1);
+  drawShell();
   recoverSafe();
   startEspNow();
   startBle();
@@ -332,14 +384,24 @@ void setup() {
 
 void loop() {
   readCommands();
+  const int8_t bleCommand = pendingBleCommand;
+  if (bleCommand >= 0) {
+    pendingBleCommand = -1;
+    if (bleCommand == 2) {
+      sendBleSnapshot("sync");
+    } else if (static_cast<int32_t>(millis() - manualOverrideUntil) >= 0) {
+      lastCommandAt = millis();
+      commandSource = "BLE";
+      setIsolated(bleCommand == 1);
+    }
+  }
   if (espNowPending && static_cast<int32_t>(millis() - manualOverrideUntil) >= 0) {
     espNowPending = false;
     lastCommandAt = millis();
     commandSource = "NOW";
     setIsolated(espNowIsolated);
   }
-  pollButton(kInjectButton, injectButtonHigh, injectButtonChangedAt, false);
-  pollButton(kRecoverButton, recoverButtonHigh, recoverButtonChangedAt, true);
+  pollButtons();
   if (bleSnapshotPending) {
     bleSnapshotPending = false;
     sendBleSnapshot("connected");

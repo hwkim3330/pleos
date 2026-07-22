@@ -94,9 +94,12 @@ The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first bo
 
 Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for 1.2 seconds. A circular heartbeat shows command age and uses the current state color without full-screen redraw. `SOURCE` identifies `BLE`, `NOW`, `LOCAL`, or fail-safe `SAFE` control.
 
-The two side buttons provide a hardware demo path: button 1 (`GPIO0`) toggles
-fault injection and button 2 (`GPIO35`) recovers immediately. The third button
-is reset and intentionally remains a reset control.
+The side controls use a fail-safe dead-man interaction. Hold the left button
+(`GPIO0`) for 600 ms to inject a fault and keep holding to maintain it;
+releasing it restores normal. The right button (`GPIO35`) recovers
+immediately. The third button is reset and intentionally remains a reset
+control. BLE callbacks only queue state changes; all relay and LCD updates run
+in the main loop so button input cannot race the display renderer.
 
 Each Path node drives its Fault Injection Module from `GPIO27` to
 `J3.3 / RELAY_EN`: LOW is normal NC pass-through and HIGH is an injected
