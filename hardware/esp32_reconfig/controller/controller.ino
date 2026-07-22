@@ -546,6 +546,33 @@ void makePathAction(lv_obj_t *parent, const char *text, int x, intptr_t action,
   lv_obj_center(label);
 }
 
+void makeSwitchNode(lv_obj_t *parent, const char *text, int x, int y, int width) {
+  auto *node = lv_obj_create(parent);
+  lv_obj_set_pos(node, x, y);
+  lv_obj_set_size(node, width, 42);
+  lv_obj_set_style_radius(node, 4, 0);
+  lv_obj_set_style_bg_color(node, lv_color_hex(0x182126), 0);
+  lv_obj_set_style_border_width(node, 1, 0);
+  lv_obj_set_style_border_color(node, lv_color_hex(0x52636B), 0);
+  lv_obj_set_style_pad_all(node, 0, 0);
+  lv_obj_clear_flag(node, LV_OBJ_FLAG_SCROLLABLE);
+  auto *label = lv_label_create(node);
+  lv_label_set_text(label, text);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(label, lv_color_hex(0xE8ECEE), 0);
+  lv_obj_center(label);
+}
+
+void makePathLine(lv_obj_t *parent, lv_point_t *points, uint16_t count,
+                  int x, int y, uint32_t color) {
+  auto *line = lv_line_create(parent);
+  lv_line_set_points(line, points, count);
+  lv_obj_set_pos(line, x, y);
+  lv_obj_set_style_line_width(line, 3, 0);
+  lv_obj_set_style_line_color(line, lv_color_hex(color), 0);
+  lv_obj_set_style_line_rounded(line, true, 0);
+}
+
 void createUi() {
   auto *screen = lv_scr_act();
   lv_obj_set_style_bg_color(screen, lv_color_hex(0x0B0F11), 0);
@@ -583,16 +610,29 @@ void createUi() {
   lv_obj_set_style_text_color(role, lv_color_hex(0x6CC7E8), 0);
   lv_obj_set_pos(role, 18, 198);
 
-  auto *topology = lv_label_create(screen);
-  lv_label_set_text(topology,
-                    "FRONT A   ===== PATH 3 =====   FRONT B\n"
-                    "     \\ PATH 1             PATH 2 /\n"
-                    "                  REAR SWITCH");
-  lv_obj_set_style_text_font(topology, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(topology, lv_color_hex(0xDCE3E6), 0);
-  lv_obj_set_style_text_align(topology, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_width(topology, 764);
-  lv_obj_set_pos(topology, 18, 239);
+  makeSwitchNode(screen, "FRONT SWITCH A", 42, 245, 178);
+  makeSwitchNode(screen, "FRONT SWITCH B", 580, 245, 178);
+  makeSwitchNode(screen, "REAR SWITCH", 311, 321, 178);
+
+  static lv_point_t path3Line[] = {{0, 0}, {360, 0}};
+  static lv_point_t path1Line[] = {{0, 0}, {180, 55}};
+  static lv_point_t path2Line[] = {{0, 55}, {180, 0}};
+  makePathLine(screen, path3Line, 2, 220, 266, 0x3B82A0);
+  makePathLine(screen, path1Line, 2, 220, 276, 0x315E87);
+  makePathLine(screen, path2Line, 2, 400, 276, 0x315E87);
+
+  auto *path3Text = lv_label_create(screen);
+  lv_label_set_text(path3Text, "PATH 3  A-B");
+  lv_obj_set_style_text_color(path3Text, lv_color_hex(0x6CC7E8), 0);
+  lv_obj_set_pos(path3Text, 354, 240);
+  auto *path1Text = lv_label_create(screen);
+  lv_label_set_text(path1Text, "PATH 1  A-REAR");
+  lv_obj_set_style_text_color(path1Text, lv_color_hex(0x8FB5C7), 0);
+  lv_obj_set_pos(path1Text, 224, 298);
+  auto *path2Text = lv_label_create(screen);
+  lv_label_set_text(path2Text, "PATH 2  B-REAR");
+  lv_obj_set_style_text_color(path2Text, lv_color_hex(0x8FB5C7), 0);
+  lv_obj_set_pos(path2Text, 482, 298);
 
   auto *hint = lv_label_create(screen);
   lv_label_set_text(hint, "ESP-NOW synchronized  |  One action keeps the other two paths NORMAL");

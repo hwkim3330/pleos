@@ -244,13 +244,14 @@ class _TopBar extends StatelessWidget {
             ),
             const SizedBox(width: 14),
             _StatusPill(
-              label: 'Controller',
+              label: 'Path 3 module',
               value: hardware.connected
-                  ? 'ESP #${hardware.sequence}'
+                  ? '7-inch ESP #${hardware.sequence}'
                   : 'Offline',
               color: hardware.connected
                   ? const Color(0xFF0F766E)
                   : const Color(0xFF64748B),
+              activity: hardware.connected,
             ),
             const SizedBox(width: 8),
             _StatusPill(
@@ -1015,11 +1016,13 @@ class _StatusPill extends StatelessWidget {
     required this.label,
     required this.value,
     required this.color,
+    this.activity = false,
   });
 
   final String label;
   final String value;
   final Color color;
+  final bool activity;
 
   @override
   Widget build(BuildContext context) {
@@ -1032,6 +1035,18 @@ class _StatusPill extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (activity) ...[
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: color,
+                backgroundColor: color.withValues(alpha: 0.16),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
           Text(
             '$label: ',
             style: const TextStyle(
