@@ -1,6 +1,9 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <Arduino.h>
+#include <BLE2902.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
 #include <SPI.h>
 
 namespace {
@@ -20,6 +23,9 @@ constexpr uint32_t kHeartbeatMs = 1000;
 constexpr const char *kPathNames[] = {"PATH 1", "PATH 2"};
 constexpr const char *kChannelIds[] = {"tsn_front_a", "tsn_front_b"};
 constexpr const char *kNodeIds[] = {"PLEOS_PATH_1", "PLEOS_PATH_2"};
+constexpr const char *kBleNames[] = {"PLEOS-PATH1", "PLEOS-PATH2"};
+constexpr char kBleServiceUuid[] = "7d2f0011-7c7a-4f7b-9b51-0af9a281d110";
+constexpr char kBleControlUuid[] = "7d2f0012-7c7a-4f7b-9b51-0af9a281d110";
 
 Adafruit_ST7789 display(kTftCs, kTftDc, kTftReset);
 String commandBuffer;
@@ -28,6 +34,25 @@ bool controllerOnline = false;
 uint32_t lastCommandAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t sequence = 0;
+BLECharacteristic *bleControl = nullptr;
+volatile bool bleConnected = false;
+volatile bool bleSnapshotPending = false;
+
+void notifyBle(const String &message) {
+  if (!bleConnected || bleControl == nullptr) return;
+  bleControl->setValue(message.c_str());
+  bleControl->notify();
+  delay(4);
+}
+
+void sendBleSnapshot(const char *event) {
+  if (!bleConnected) return;
+  notifyBle(String("!PATH:") + kPathNames[PLEOS_PATH_INDEX] + ":" + sequence + ":" +
+            (controllerOnline ? "ONLINE" : "WAITING"));
+  notifyBle(String("!CHANNEL:") + kChannelIds[PLEOS_PATH_INDEX] + ":" +
+            (isolated ? "ISOLATED" : "NORMAL"));
+  notifyBle(String("!EVENT:") + event);
+}
 
 void drawStatus() {
   const uint16_t accent = !controllerOnline ? ST77XX_ORANGE
@@ -55,6 +80,7 @@ void drawStatus() {
 void publish() {
   Serial.printf("!CHANNEL:%s:%s\n", kChannelIds[PLEOS_PATH_INDEX],
                 isolated ? "ISOLATED" : "NORMAL");
+  sendBleSnapshot("channel");
 }
 
 void setIsolated(bool value) {
@@ -74,6 +100,10 @@ void recoverSafe() {
 
 void processCommand(String command) {
   command.trim();
+  if (command == "!SYNC") {
+    sendBleSnapshot("sync");
+    return;
+  }
   lastCommandAt = millis();
   if (command == "!RECOVER") {
     setIsolated(false);
@@ -84,6 +114,44 @@ void processCommand(String command) {
   if (separator < 0) return;
   if (command.substring(9, separator) != kChannelIds[PLEOS_PATH_INDEX]) return;
   setIsolated(command.substring(separator + 1) != "NORMAL");
+}
+
+class PathServerCallbacks final : public BLEServerCallbacks {
+  void onConnect(BLEServer *) override {
+    bleConnected = true;
+    bleSnapshotPending = true;
+  }
+
+  void onDisconnect(BLEServer *server) override {
+    bleConnected = false;
+    server->startAdvertising();
+  }
+};
+
+class PathControlCallbacks final : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *characteristic) override {
+    processCommand(characteristic->getValue());
+  }
+};
+
+void startBle() {
+  BLEDevice::init(kBleNames[PLEOS_PATH_INDEX]);
+  BLEDevice::setMTU(185);
+  auto *server = BLEDevice::createServer();
+  server->setCallbacks(new PathServerCallbacks());
+  auto *service = server->createService(kBleServiceUuid);
+  bleControl = service->createCharacteristic(
+      kBleControlUuid,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
+          BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_NOTIFY);
+  bleControl->setCallbacks(new PathControlCallbacks());
+  bleControl->addDescriptor(new BLE2902());
+  bleControl->setValue("!BOOT:SAFE_BYPASS");
+  service->start();
+  auto *advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(kBleServiceUuid);
+  advertising->setScanResponse(true);
+  BLEDevice::startAdvertising();
 }
 
 void readCommands() {
@@ -108,11 +176,16 @@ void setup() {
   display.init(135, 240);
   display.setRotation(1);
   recoverSafe();
+  startBle();
   Serial.printf("!NODE:%s:READY\n", kNodeIds[PLEOS_PATH_INDEX]);
 }
 
 void loop() {
   readCommands();
+  if (bleSnapshotPending) {
+    bleSnapshotPending = false;
+    sendBleSnapshot("connected");
+  }
   if (controllerOnline && millis() - lastCommandAt >= kCommandWatchdogMs) recoverSafe();
   if (millis() - lastHeartbeatAt >= kHeartbeatMs) {
     lastHeartbeatAt = millis();

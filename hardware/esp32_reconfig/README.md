@@ -70,4 +70,13 @@ The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first bo
 
 Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for five seconds.
 
+Both nodes advertise BLE independently:
+
+| Node | BLE name | Channel |
+| --- | --- | --- |
+| Path1 | `PLEOS-PATH1` | `tsn_front_a` |
+| Path2 | `PLEOS-PATH2` | `tsn_front_b` |
+
+The Mac bridge connects `PLEOS-RECONFIG`, `PLEOS-PATH1`, and `PLEOS-PATH2` concurrently. It refreshes each path command once per second and reports both node connections to the PLEOS app under `path_nodes`.
+
 Build three firmware variants with `AR`, `BR`, or `AB`. ESP-AB sits between the two front switches, ESP-AR between front A and rear R, and ESP-BR between front B and rear R. Each board ignores commands for the other two links.

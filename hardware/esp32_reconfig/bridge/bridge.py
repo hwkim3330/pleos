@@ -14,6 +14,9 @@ import websockets
 MAGIC = b"\xa5\x5a"
 BLE_SERVICE = "7d2f0001-7c7a-4f7b-9b51-0af9a281d110"
 BLE_CONTROL = "7d2f0002-7c7a-4f7b-9b51-0af9a281d110"
+PATH_SERVICE = "7d2f0011-7c7a-4f7b-9b51-0af9a281d110"
+PATH_CONTROL = "7d2f0012-7c7a-4f7b-9b51-0af9a281d110"
+PATH_NODES = {"PLEOS-PATH1": "tsn_front_a", "PLEOS-PATH2": "tsn_front_b"}
 CHANNEL_COUNT = 9
 
 
@@ -69,6 +72,7 @@ async def main() -> None:
         "mode": "OFFLINE",
         "io_node_connected": False,
         "channels": {},
+        "path_nodes": {},
     }
 
     async def broadcast() -> None:
@@ -101,7 +105,7 @@ async def main() -> None:
             clients.discard(socket)
             print(f"[bridge] app disconnected ({len(clients)})")
 
-    async def run_ble() -> None:
+    async def run_controller_ble() -> None:
         while True:
             try:
                 print(f"[ble] scanning for {args.ble_name}")
@@ -144,6 +148,57 @@ async def main() -> None:
                 print(f"[ble] reconnecting after error: {error}")
                 await broadcast()
                 await asyncio.sleep(2)
+
+    async def run_path_ble(name: str, channel_id: str) -> None:
+        while True:
+            try:
+                print(f"[ble] scanning for {name}")
+                device = await BleakScanner.find_device_by_name(name, timeout=8)
+                if device is None:
+                    await asyncio.sleep(2)
+                    continue
+                async with BleakClient(device) as client:
+                    print(f"[ble] connected: {name}")
+                    latest["path_nodes"][name] = {
+                        "connected": True,
+                        "channel": channel_id,
+                        "health": "NORMAL",
+                    }
+
+                    async def on_notify(_, payload: bytearray) -> None:
+                        line = payload.decode(errors="replace").strip()
+                        fields = line.split(":")
+                        if line.startswith("!CHANNEL:") and len(fields) >= 3:
+                            latest["path_nodes"][name]["health"] = fields[2]
+                        elif line.startswith("!EVENT:"):
+                            await broadcast()
+
+                    await client.start_notify(PATH_CONTROL, on_notify)
+                    await client.write_gatt_char(PATH_CONTROL, b"!SYNC", response=True)
+                    while client.is_connected:
+                        desired = (
+                            latest["channels"].get(channel_id, "NORMAL")
+                            if latest["mode"] != "OFFLINE"
+                            else "NORMAL"
+                        )
+                        command = f"!CHANNEL:{channel_id}:{desired}".encode()
+                        await client.write_gatt_char(PATH_CONTROL, command, response=True)
+                        await asyncio.sleep(1)
+            except Exception as error:
+                latest["path_nodes"][name] = {
+                    "connected": False,
+                    "channel": channel_id,
+                    "health": "UNKNOWN",
+                }
+                print(f"[ble] reconnecting {name} after error: {error}")
+                await broadcast()
+                await asyncio.sleep(2)
+
+    async def run_ble() -> None:
+        await asyncio.gather(
+            run_controller_ble(),
+            *(run_path_ble(name, channel) for name, channel in PATH_NODES.items()),
+        )
 
     async def run_serial() -> None:
         port = find_port(args.serial)

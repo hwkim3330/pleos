@@ -12,6 +12,7 @@ class HardwareReconfigState {
     this.channels = const {},
     this.sequence = 0,
     this.ioNodeConnected = false,
+    this.pathNodes = const {},
   });
 
   final bool connected;
@@ -20,6 +21,7 @@ class HardwareReconfigState {
   final Map<String, String> channels;
   final int sequence;
   final bool ioNodeConnected;
+  final Map<String, bool> pathNodes;
 }
 
 class HardwareReconfigService {
@@ -186,6 +188,12 @@ class HardwareReconfigService {
       final channels = (data['channels'] as Map? ?? {}).map(
         (key, value) => MapEntry(key.toString(), value.toString()),
       );
+      final pathNodes = (data['path_nodes'] as Map? ?? {}).map(
+        (key, value) => MapEntry(
+          key.toString(),
+          value is Map && value['connected'] == true,
+        ),
+      );
       _states.add(
         HardwareReconfigState(
           connected: true,
@@ -194,6 +202,7 @@ class HardwareReconfigService {
           channels: channels,
           sequence: (data['seq'] as num?)?.toInt() ?? 0,
           ioNodeConnected: data['io_node_connected'] == true,
+          pathNodes: pathNodes,
         ),
       );
     } catch (_) {

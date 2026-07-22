@@ -221,6 +221,17 @@ class _TopBar extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             _StatusPill(
+              label: 'Path nodes',
+              value:
+                  '${hardware.pathNodes.values.where((online) => online).length}/2 online',
+              color:
+                  hardware.pathNodes.values.where((online) => online).length ==
+                      2
+                  ? const Color(0xFF0F766E)
+                  : const Color(0xFFD97706),
+            ),
+            const SizedBox(width: 8),
+            _StatusPill(
               label: 'Scenario',
               value: scenario.title,
               color: scenario.color,
