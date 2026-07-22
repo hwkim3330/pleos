@@ -70,7 +70,10 @@ procedure are documented in [FAULT_INJECTION_WIRING.md](FAULT_INJECTION_WIRING.m
 
 The 7-inch controller broadcasts a compact Path1/Path2 state frame every
 250 ms on Wi-Fi channel 6. Each frame contains a protocol magic value,
-sequence number, two isolation bits, and CRC-16. Path nodes accept either BLE
+sequence number, two isolation bits, and CRC-16. Each Path node returns a
+CRC-protected acknowledgement once per second with its role and applied relay
+state. The controller shows `P1 ACK` or `P2 ACK` only while that acknowledgement
+is fresh; BLE advertising alone is not treated as proof of control. Path nodes accept either BLE
 or ESP-NOW; the newest valid command wins. If neither path refreshes within
 1.2 seconds, GPIO27 returns LOW and restores NC pass-through.
 
@@ -113,6 +116,12 @@ Both nodes advertise BLE independently:
 | --- | --- | --- |
 | Path1 | `PLEOS-PATH1` | `tsn_front_a` |
 | Path2 | `PLEOS-PATH2` | `tsn_front_b` |
+
+The 7-inch screen is the only normal operator surface. It provides six fault
+actions (three individual links and three switches), a separate full recovery
+action, and a live circular ESP-NOW heartbeat. A switch fault isolates both
+links physically incident to that switch: Front A = Paths 1+3, Front B = Paths
+2+3, and Rear = Paths 1+2.
 
 The Mac bridge connects `PLEOS-RECONFIG`, `PLEOS-PATH1`, and `PLEOS-PATH2` concurrently. It refreshes each path command once per second and reports both node connections to the PLEOS app under `path_nodes`.
 

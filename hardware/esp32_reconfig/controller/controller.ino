@@ -20,6 +20,7 @@ constexpr uint32_t kHeartbeatMs = 1000;
 constexpr uint32_t kEspNowPeriodMs = 250;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
+constexpr uint32_t kPathAckMagic = 0x5041434B;
 constexpr bool kPhysicalOutputsEnabled = false;
 constexpr char kBleDeviceName[] = "PLEOS-RECONFIG";
 constexpr char kBleServiceUuid[] = "7d2f0001-7c7a-4f7b-9b51-0af9a281d110";
@@ -52,6 +53,7 @@ lv_obj_t *modeLabel;
 lv_obj_t *networkLabel;
 lv_obj_t *linkLabel;
 lv_obj_t *eventLabel;
+lv_obj_t *heartbeatArc;
 uint32_t sequenceNumber = 0;
 uint32_t lastHeartbeat = 0;
 const char *effectiveMode = "TRIPLE";
@@ -68,12 +70,24 @@ volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
 uint32_t lastEspNowAt = 0;
 uint32_t espNowSequence = 0;
+uint32_t lastArcAt = 0;
+volatile uint32_t pathAckAt[2] = {0, 0};
+volatile bool pathAckPending = false;
 
 struct __attribute__((packed)) PathNowFrame {
   uint32_t magic;
   uint32_t sequence;
   uint8_t version;
   uint8_t isolatedMask;
+  uint16_t crc;
+};
+
+struct __attribute__((packed)) PathAckFrame {
+  uint32_t magic;
+  uint32_t sequence;
+  uint8_t version;
+  uint8_t pathIndex;
+  uint8_t isolated;
   uint16_t crc;
 };
 
@@ -161,6 +175,19 @@ uint16_t crc16(const uint8_t *data, size_t length) {
   return crc;
 }
 
+void onEspNowReceive(const esp_now_recv_info_t *, const uint8_t *data, int length) {
+  if (length != sizeof(PathAckFrame)) return;
+  PathAckFrame frame;
+  memcpy(&frame, data, sizeof(frame));
+  if (frame.magic != kPathAckMagic || frame.version != kProtocolVersion ||
+      frame.pathIndex > 1) return;
+  const uint16_t expected = crc16(reinterpret_cast<const uint8_t *>(&frame),
+                                  sizeof(frame) - sizeof(frame.crc));
+  if (frame.crc != expected) return;
+  pathAckAt[frame.pathIndex] = millis();
+  pathAckPending = true;
+}
+
 void startEspNow() {
   WiFi.mode(WIFI_STA);
   esp_wifi_set_channel(kEspNowChannel, WIFI_SECOND_CHAN_NONE);
@@ -173,6 +200,7 @@ void startEspNow() {
   peer.channel = kEspNowChannel;
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK) Serial.println("!ESPNOW:PEER_FAILED");
+  esp_now_register_recv_cb(onEspNowReceive);
 }
 
 void sendEspNowState() {
@@ -262,11 +290,13 @@ void refreshUi() {
                               lv_color_hex(activePaths == 3 ? 0x66D6B1 :
                                            (activePaths > 0 ? 0xF0A83B : 0xFF6A61)), 0);
   lv_label_set_text(eventLabel, lastEvent);
-  lv_label_set_text(linkLabel, ioNodeConnected
-                                   ? (bleConnected ? "BLE ONLINE  |  NOW TX  |  I/O ONLINE"
-                                                   : "BLE WAITING |  NOW TX  |  I/O ONLINE")
-                                   : (bleConnected ? "BLE ONLINE  |  NOW TX  |  I/O OFFLINE"
-                                                   : "BLE WAITING |  NOW TX  |  I/O OFFLINE"));
+  const uint32_t now = millis();
+  const bool path1Online = now - pathAckAt[0] < 2500;
+  const bool path2Online = now - pathAckAt[1] < 2500;
+  lv_label_set_text_fmt(linkLabel, "BLE %s | P1 %s | P2 %s",
+                        bleConnected ? "ON" : "WAIT",
+                        path1Online ? "ACK" : "--",
+                        path2Online ? "ACK" : "--");
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(ioNodeConnected ? 0x66D6B1 : 0x92A0A5), 0);
 }
 
@@ -304,10 +334,38 @@ void setExclusivePathFault(int path, bool forwardToNode = true) {
   sendState("path_fault", channels[path - 1].id);
 }
 
+void setSwitchFault(int switchIndex) {
+  for (int i = 0; i < 3; ++i) channels[i].health = Health::healthy;
+  if (switchIndex == 0) {
+    channels[0].health = Health::failed;
+    channels[2].health = Health::failed;
+    lastEvent = "Front Switch A fault";
+  } else if (switchIndex == 1) {
+    channels[1].health = Health::failed;
+    channels[2].health = Health::failed;
+    lastEvent = "Front Switch B fault";
+  } else {
+    channels[0].health = Health::failed;
+    channels[1].health = Health::failed;
+    lastEvent = "Rear Switch fault";
+  }
+  refreshUi();
+  for (int i = 0; i < 3; ++i) {
+    sendNodeCommand(String("!CHANNEL:") + channels[i].id + ":" +
+                    healthName(channels[i].health));
+  }
+  sendState("switch_fault", switchIndex == 0 ? "front_a" :
+                                  (switchIndex == 1 ? "front_b" : "rear"));
+}
+
 void pathActionPressed(lv_event_t *event) {
   const intptr_t action = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
   if (action >= 1 && action <= 3) {
     setExclusivePathFault(static_cast<int>(action));
+    return;
+  }
+  if (action >= 4 && action <= 6) {
+    setSwitchFault(static_cast<int>(action - 4));
     return;
   }
   setAllHealthy();
@@ -530,11 +588,11 @@ void makeScenario(lv_obj_t *parent, const char *text, int x, intptr_t scenario, 
   lv_obj_center(label);
 }
 
-void makePathAction(lv_obj_t *parent, const char *text, int x, intptr_t action,
-                    uint32_t color) {
+void makePathAction(lv_obj_t *parent, const char *text, int x, int y, int width,
+                    intptr_t action, uint32_t color) {
   auto *button = lv_btn_create(parent);
-  lv_obj_set_pos(button, x, 405);
-  lv_obj_set_size(button, 180, 56);
+  lv_obj_set_pos(button, x, y);
+  lv_obj_set_size(button, width, 58);
   lv_obj_set_style_radius(button, 5, 0);
   lv_obj_set_style_shadow_width(button, 0, 0);
   lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
@@ -544,33 +602,6 @@ void makePathAction(lv_obj_t *parent, const char *text, int x, intptr_t action,
   lv_label_set_text(label, text);
   lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
   lv_obj_center(label);
-}
-
-void makeSwitchNode(lv_obj_t *parent, const char *text, int x, int y, int width) {
-  auto *node = lv_obj_create(parent);
-  lv_obj_set_pos(node, x, y);
-  lv_obj_set_size(node, width, 42);
-  lv_obj_set_style_radius(node, 4, 0);
-  lv_obj_set_style_bg_color(node, lv_color_hex(0x182126), 0);
-  lv_obj_set_style_border_width(node, 1, 0);
-  lv_obj_set_style_border_color(node, lv_color_hex(0x52636B), 0);
-  lv_obj_set_style_pad_all(node, 0, 0);
-  lv_obj_clear_flag(node, LV_OBJ_FLAG_SCROLLABLE);
-  auto *label = lv_label_create(node);
-  lv_label_set_text(label, text);
-  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(label, lv_color_hex(0xE8ECEE), 0);
-  lv_obj_center(label);
-}
-
-void makePathLine(lv_obj_t *parent, lv_point_t *points, uint16_t count,
-                  int x, int y, uint32_t color) {
-  auto *line = lv_line_create(parent);
-  lv_line_set_points(line, points, count);
-  lv_obj_set_pos(line, x, y);
-  lv_obj_set_style_line_width(line, 3, 0);
-  lv_obj_set_style_line_color(line, lv_color_hex(color), 0);
-  lv_obj_set_style_line_rounded(line, true, 0);
 }
 
 void createUi() {
@@ -588,6 +619,18 @@ void createUi() {
   networkLabel = lv_label_create(screen);
   lv_obj_set_style_text_font(networkLabel, &lv_font_montserrat_16, 0);
   lv_obj_set_pos(networkLabel, 18, 58);
+  heartbeatArc = lv_arc_create(screen);
+  lv_obj_set_size(heartbeatArc, 34, 34);
+  lv_obj_set_pos(heartbeatArc, 390, 48);
+  lv_arc_set_range(heartbeatArc, 0, 100);
+  lv_arc_set_value(heartbeatArc, 72);
+  lv_arc_set_bg_angles(heartbeatArc, 0, 360);
+  lv_obj_remove_style(heartbeatArc, nullptr, LV_PART_KNOB);
+  lv_obj_clear_flag(heartbeatArc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_arc_width(heartbeatArc, 3, LV_PART_MAIN);
+  lv_obj_set_style_arc_color(heartbeatArc, lv_color_hex(0x263238), LV_PART_MAIN);
+  lv_obj_set_style_arc_width(heartbeatArc, 3, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(heartbeatArc, lv_color_hex(0x66D6B1), LV_PART_INDICATOR);
   linkLabel = lv_label_create(screen);
   lv_label_set_text(linkLabel, "BLE WAITING  |  NOW TX");
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(0x92A0A5), 0);
@@ -605,43 +648,22 @@ void createUi() {
   lv_obj_set_style_border_width(channels[2].button, 3, 0);
 
   auto *role = lv_label_create(screen);
-  lv_label_set_text(role, "7-INCH NODE  |  FRONT A-B INLINE INJECTOR  |  PATH 3 OWNER");
+  lv_label_set_text(role, "FAULT INJECTION CONTROL  |  PATH 3 OWNER  |  ESP-NOW LIVE");
   lv_obj_set_style_text_font(role, &lv_font_montserrat_16, 0);
   lv_obj_set_style_text_color(role, lv_color_hex(0x6CC7E8), 0);
-  lv_obj_set_pos(role, 18, 198);
-
-  makeSwitchNode(screen, "FRONT SWITCH A", 42, 245, 178);
-  makeSwitchNode(screen, "FRONT SWITCH B", 580, 245, 178);
-  makeSwitchNode(screen, "REAR SWITCH", 311, 321, 178);
-
-  static lv_point_t path3Line[] = {{0, 0}, {360, 0}};
-  static lv_point_t path1Line[] = {{0, 0}, {180, 55}};
-  static lv_point_t path2Line[] = {{0, 55}, {180, 0}};
-  makePathLine(screen, path3Line, 2, 220, 266, 0x3B82A0);
-  makePathLine(screen, path1Line, 2, 220, 276, 0x315E87);
-  makePathLine(screen, path2Line, 2, 400, 276, 0x315E87);
-
-  auto *path3Text = lv_label_create(screen);
-  lv_label_set_text(path3Text, "PATH 3  A-B");
-  lv_obj_set_style_text_color(path3Text, lv_color_hex(0x6CC7E8), 0);
-  lv_obj_set_pos(path3Text, 354, 240);
-  auto *path1Text = lv_label_create(screen);
-  lv_label_set_text(path1Text, "PATH 1  A-REAR");
-  lv_obj_set_style_text_color(path1Text, lv_color_hex(0x8FB5C7), 0);
-  lv_obj_set_pos(path1Text, 224, 298);
-  auto *path2Text = lv_label_create(screen);
-  lv_label_set_text(path2Text, "PATH 2  B-REAR");
-  lv_obj_set_style_text_color(path2Text, lv_color_hex(0x8FB5C7), 0);
-  lv_obj_set_pos(path2Text, 482, 298);
+  lv_obj_set_pos(role, 18, 190);
 
   auto *hint = lv_label_create(screen);
   lv_label_set_text(hint, "ESP-NOW synchronized  |  One action keeps the other two paths NORMAL");
   lv_obj_set_style_text_color(hint, lv_color_hex(0x89959A), 0);
-  lv_obj_set_pos(hint, 19, 369);
-  makePathAction(screen, "PATH 1 LINK DOWN", 18, 1, 0x263942);
-  makePathAction(screen, "PATH 2 LINK DOWN", 214, 2, 0x263942);
-  makePathAction(screen, "PATH 3 LINK DOWN", 410, 3, 0xA66B17);
-  makePathAction(screen, "RECOVER ALL", 606, 4, 0x177C62);
+  lv_obj_set_pos(hint, 19, 218);
+  makePathAction(screen, "PATH 1 LINK DOWN", 18, 246, 240, 1, 0x263942);
+  makePathAction(screen, "PATH 2 LINK DOWN", 280, 246, 240, 2, 0x263942);
+  makePathAction(screen, "PATH 3 LINK DOWN", 542, 246, 240, 3, 0xA66B17);
+  makePathAction(screen, "FRONT SWITCH A FAULT", 18, 316, 240, 4, 0x7E3030);
+  makePathAction(screen, "FRONT SWITCH B FAULT", 280, 316, 240, 5, 0x7E3030);
+  makePathAction(screen, "REAR SWITCH FAULT", 542, 316, 240, 6, 0x7E3030);
+  makePathAction(screen, "RECOVER ALL PATHS", 18, 390, 764, 7, 0x177C62);
   refreshUi();
 }
 
@@ -688,6 +710,12 @@ void loop() {
     lvgl_port_unlock();
     sendState(bleConnected ? "ble_connected" : "ble_disconnected");
   }
+  if (pathAckPending) {
+    pathAckPending = false;
+    lvgl_port_lock(-1);
+    refreshUi();
+    lvgl_port_unlock();
+  }
   if (ioNodeConnected != lastRenderedIoNodeConnected) {
     lastRenderedIoNodeConnected = ioNodeConnected;
     lastEvent = ioNodeConnected ? "USB I/O node connected" : "USB I/O node disconnected";
@@ -697,6 +725,12 @@ void loop() {
     sendState(ioNodeConnected ? "io_node_connected" : "io_node_disconnected");
   }
   const uint32_t now = millis();
+  if (heartbeatArc != nullptr && now - lastArcAt >= 40) {
+    lastArcAt = now;
+    lvgl_port_lock(-1);
+    lv_arc_set_rotation(heartbeatArc, (now / 12) % 360);
+    lvgl_port_unlock();
+  }
   if (now - lastEspNowAt >= kEspNowPeriodMs) {
     lastEspNowAt = now;
     sendEspNowState();

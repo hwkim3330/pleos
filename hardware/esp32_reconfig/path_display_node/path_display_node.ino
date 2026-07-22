@@ -34,6 +34,7 @@ constexpr uint32_t kInjectHoldMs = 600;
 constexpr uint32_t kManualOverrideMs = 1200;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
+constexpr uint32_t kPathAckMagic = 0x5041434B;
 constexpr const char *kPathNames[] = {"PATH 1", "PATH 2", "PATH 3"};
 constexpr const char *kChannelIds[] = {"tsn_front_a", "tsn_front_b", "tsn_rear"};
 constexpr const char *kNodeIds[] = {"PLEOS_PATH_1", "PLEOS_PATH_2", "PLEOS_PATH_3"};
@@ -74,6 +75,15 @@ struct __attribute__((packed)) PathNowFrame {
   uint32_t sequence;
   uint8_t version;
   uint8_t isolatedMask;
+  uint16_t crc;
+};
+
+struct __attribute__((packed)) PathAckFrame {
+  uint32_t magic;
+  uint32_t sequence;
+  uint8_t version;
+  uint8_t pathIndex;
+  uint8_t isolated;
   uint16_t crc;
 };
 
@@ -254,6 +264,21 @@ void startEspNow() {
     return;
   }
   esp_now_register_recv_cb(onEspNowReceive);
+  esp_now_peer_info_t peer{};
+  memset(peer.peer_addr, 0xFF, ESP_NOW_ETH_ALEN);
+  peer.channel = kEspNowChannel;
+  peer.encrypt = false;
+  esp_now_add_peer(&peer);
+}
+
+void sendEspNowAck() {
+  PathAckFrame frame{kPathAckMagic, sequence, 1,
+                     static_cast<uint8_t>(PLEOS_PATH_INDEX),
+                     static_cast<uint8_t>(isolated), 0};
+  frame.crc = crc16(reinterpret_cast<const uint8_t *>(&frame),
+                    sizeof(frame) - sizeof(frame.crc));
+  static const uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  esp_now_send(broadcast, reinterpret_cast<const uint8_t *>(&frame), sizeof(frame));
 }
 
 class PathServerCallbacks final : public BLEServerCallbacks {
@@ -412,6 +437,7 @@ void loop() {
   if (millis() - lastHeartbeatAt >= kHeartbeatMs) {
     lastHeartbeatAt = millis();
     Serial.printf("!NODE:%s:HEARTBEAT:%lu\n", kNodeIds[PLEOS_PATH_INDEX], ++sequence);
+    sendEspNowAck();
   }
   if (millis() - lastUiAt >= kUiRefreshMs) {
     lastUiAt = millis();
