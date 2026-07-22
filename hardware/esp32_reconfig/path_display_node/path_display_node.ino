@@ -33,6 +33,7 @@ constexpr uint32_t kUiRefreshMs = 200;
 constexpr uint32_t kButtonDebounceMs = 40;
 constexpr uint32_t kInjectHoldMs = 600;
 constexpr uint32_t kManualOverrideMs = 1200;
+constexpr bool kUseBleController = true;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
 constexpr uint32_t kPathAckMagic = 0x5041434B;
@@ -70,6 +71,8 @@ int8_t previousRingHead = -1;
 uint16_t previousRingAccent = 0;
 bool ringRedrawPending = true;
 volatile int8_t pendingBleCommand = -1;
+volatile uint32_t pendingBleCommandId = 0;
+volatile bool bleDisconnectPending = false;
 BLECharacteristic *bleControl = nullptr;
 volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
@@ -294,6 +297,7 @@ class PathServerCallbacks final : public BLEServerCallbacks {
 
   void onDisconnect(BLEServer *server) override {
     bleConnected = false;
+    bleDisconnectPending = true;
     server->startAdvertising();
   }
 };
@@ -302,6 +306,14 @@ class PathControlCallbacks final : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
     String command = characteristic->getValue();
     command.trim();
+    if (command.startsWith("!SET:")) {
+      const int separator = command.indexOf(':', 5);
+      if (separator > 5) {
+        pendingBleCommandId = command.substring(5, separator).toInt();
+        pendingBleCommand = command.substring(separator + 1) == "SAFE" ? 0 : 1;
+      }
+      return;
+    }
     if (command == "!SYNC") {
       pendingBleCommand = 2;
     } else if (command == "!RECOVER") {
@@ -409,13 +421,17 @@ void setup() {
   display.setRotation(1);
   drawShell();
   recoverSafe();
-  startEspNow();
+  if (!kUseBleController) startEspNow();
   startBle();
   Serial.printf("!NODE:%s:READY\n", kNodeIds[PLEOS_PATH_INDEX]);
 }
 
 void loop() {
   readCommands();
+  if (bleDisconnectPending) {
+    bleDisconnectPending = false;
+    recoverSafe();
+  }
   const int8_t bleCommand = pendingBleCommand;
   if (bleCommand >= 0) {
     pendingBleCommand = -1;
@@ -425,9 +441,12 @@ void loop() {
       lastCommandAt = millis();
       commandSource = "BLE";
       setIsolated(bleCommand == 1);
+      notifyBle(String("!APPLIED:") + pendingBleCommandId + ":" +
+                (isolated ? "HIGH" : "LOW"));
     }
   }
-  if (espNowPending && static_cast<int32_t>(millis() - manualOverrideUntil) >= 0) {
+  if (!kUseBleController && espNowPending &&
+      static_cast<int32_t>(millis() - manualOverrideUntil) >= 0) {
     espNowPending = false;
     lastCommandAt = millis();
     commandSource = "NOW";
@@ -438,8 +457,9 @@ void loop() {
     bleSnapshotPending = false;
     sendBleSnapshot("connected");
   }
-  if (controllerOnline && millis() - lastCommandAt >= kCommandWatchdogMs) recoverSafe();
-  if (millis() - lastAckAt >= kAckPeriodMs) {
+  if (!kUseBleController && controllerOnline &&
+      millis() - lastCommandAt >= kCommandWatchdogMs) recoverSafe();
+  if (!kUseBleController && millis() - lastAckAt >= kAckPeriodMs) {
     lastAckAt = millis();
     sendEspNowAck();
   }

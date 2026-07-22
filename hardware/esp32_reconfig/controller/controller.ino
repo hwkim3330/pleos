@@ -24,6 +24,10 @@ constexpr uint32_t kPathAckTimeoutMs = 10000;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
 constexpr uint32_t kPathAckMagic = 0x5041434B;
+constexpr bool kUseBlePathTransport = true;
+constexpr char kPathBleServiceUuid[] = "7d2f0011-7c7a-4f7b-9b51-0af9a281d110";
+constexpr char kPathBleControlUuid[] = "7d2f0012-7c7a-4f7b-9b51-0af9a281d110";
+constexpr const char *kPathBleNames[] = {"PLEOS-PATH1", "PLEOS-PATH2"};
 constexpr uint8_t kPathNodeMacs[][ESP_NOW_ETH_ALEN] = {
     {0xA8, 0x42, 0xE3, 0x3D, 0x70, 0xF8},  // Path 1
     {0xA8, 0x42, 0xE3, 0x3D, 0x84, 0xD8},  // Path 2
@@ -83,8 +87,17 @@ uint32_t espNowSequence = 0;
 uint32_t lastPulseAt = 0;
 volatile uint32_t pathAckAt[2] = {0, 0};
 volatile bool pathAckPending = false;
+BLEClient *pathBleClients[2] = {nullptr, nullptr};
+BLERemoteCharacteristic *pathBleControls[2] = {nullptr, nullptr};
+volatile bool pathBleConnected[2] = {false, false};
+volatile uint8_t pathBleApplied[2] = {0xFF, 0xFF};
+uint32_t pathBleCommandId[2] = {0, 0};
+uint32_t pathBleCommandAt[2] = {0, 0};
 
 bool isPathOnline(size_t index, uint32_t now = millis()) {
+  if (kUseBlePathTransport) {
+    return index < 2 && pathBleConnected[index] && pathBleApplied[index] != 0xFF;
+  }
   return index < 2 && pathAckAt[index] != 0 && now - pathAckAt[index] < kPathAckTimeoutMs;
 }
 
@@ -228,6 +241,21 @@ void startEspNow() {
 }
 
 void sendEspNowState() {
+  if (kUseBlePathTransport) {
+    const uint32_t now = millis();
+    for (size_t index = 0; index < 2; ++index) {
+      if (!pathBleConnected[index] || pathBleControls[index] == nullptr) continue;
+      const uint8_t desired = channels[index].health == Health::healthy ? 0 : 1;
+      if (pathBleApplied[index] == desired || now - pathBleCommandAt[index] < 250) continue;
+      const uint32_t commandId = ++pathBleCommandId[index];
+      const String command = String("!SET:") + commandId + ":" +
+                             (desired ? "FAULT" : "SAFE");
+      if (pathBleControls[index]->writeValue(command, true)) {
+        pathBleCommandAt[index] = now;
+      }
+    }
+    return;
+  }
   PathNowFrame frame{kEspNowMagic, ++espNowSequence, kProtocolVersion, 0, 0};
   if (channels[0].health != Health::healthy) frame.isolatedMask |= 0x01;
   if (channels[1].health != Health::healthy) frame.isolatedMask |= 0x02;
@@ -329,7 +357,7 @@ void refreshUi() {
   const uint32_t now = millis();
   const bool path1Online = isPathOnline(0, now);
   const bool path2Online = isPathOnline(1, now);
-  lv_label_set_text_fmt(linkLabel, "BLE %s | P1 %s | P2 %s",
+  lv_label_set_text_fmt(linkLabel, "TABLET %s | P1 %s | P2 %s",
                         bleConnected ? "ON" : "WAIT",
                         path1Online ? "ACK" : "--",
                         path2Online ? "ACK" : "--");
@@ -578,6 +606,96 @@ class ReconfigControlCallbacks final : public BLECharacteristicCallbacks {
   }
 };
 
+void onPathBleNotify(BLERemoteCharacteristic *characteristic, uint8_t *data,
+                     size_t length, bool) {
+  int index = -1;
+  for (int candidate = 0; candidate < 2; ++candidate) {
+    if (pathBleControls[candidate] == characteristic) index = candidate;
+  }
+  if (index < 0 || length == 0) return;
+  String message;
+  message.reserve(length);
+  for (size_t i = 0; i < length; ++i) message += static_cast<char>(data[i]);
+  if (!message.startsWith("!APPLIED:")) return;
+  const int separator = message.indexOf(':', 9);
+  if (separator < 0) return;
+  const uint32_t commandId = message.substring(9, separator).toInt();
+  if (commandId != pathBleCommandId[index]) return;
+  pathBleApplied[index] = message.substring(separator + 1) == "HIGH" ? 1 : 0;
+  pathAckAt[index] = millis();
+  pathAckPending = true;
+}
+
+class PathBleClientCallbacks final : public BLEClientCallbacks {
+ public:
+  explicit PathBleClientCallbacks(uint8_t index) : index_(index) {}
+
+  void onConnect(BLEClient *) override { pathBleConnected[index_] = true; }
+
+  void onDisconnect(BLEClient *) override {
+    pathBleConnected[index_] = false;
+    pathBleControls[index_] = nullptr;
+    pathBleApplied[index_] = 0xFF;
+    pathAckPending = true;
+  }
+
+ private:
+  uint8_t index_;
+};
+
+bool connectPathBle(uint8_t index, BLEAdvertisedDevice *device) {
+  if (index > 1 || pathBleConnected[index]) return true;
+  if (pathBleClients[index] == nullptr) {
+    pathBleClients[index] = BLEDevice::createClient();
+    pathBleClients[index]->setClientCallbacks(new PathBleClientCallbacks(index));
+  }
+  if (!pathBleClients[index]->connectTimeout(device, 1500)) return false;
+  pathBleClients[index]->setMTU(185);
+  auto *service = pathBleClients[index]->getService(BLEUUID(kPathBleServiceUuid));
+  if (service == nullptr) {
+    pathBleClients[index]->disconnect();
+    return false;
+  }
+  pathBleControls[index] = service->getCharacteristic(BLEUUID(kPathBleControlUuid));
+  if (pathBleControls[index] == nullptr) {
+    pathBleClients[index]->disconnect();
+    return false;
+  }
+  if (pathBleControls[index]->canNotify()) {
+    pathBleControls[index]->registerForNotify(onPathBleNotify);
+  }
+  pathBleConnected[index] = true;
+  pathBleApplied[index] = 0xFF;
+  pathAckPending = true;
+  return true;
+}
+
+void pathBleConnectionTask(void *) {
+  auto *scan = BLEDevice::getScan();
+  scan->setActiveScan(true);
+  scan->setInterval(100);
+  scan->setWindow(80);
+  for (;;) {
+    if (!pathBleConnected[0] || !pathBleConnected[1]) {
+      auto *results = scan->start(2, false);
+      if (results != nullptr) {
+        for (int i = 0; i < results->getCount(); ++i) {
+          auto device = results->getDevice(i);
+          if (!device.haveName() || !device.haveServiceUUID() ||
+              !device.isAdvertisingService(BLEUUID(kPathBleServiceUuid))) continue;
+          for (uint8_t index = 0; index < 2; ++index) {
+            if (!pathBleConnected[index] && device.getName() == kPathBleNames[index]) {
+              connectPathBle(index, &device);
+            }
+          }
+        }
+      }
+      scan->clearResults();
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
 void startBle() {
   BLEDevice::init(kBleDeviceName);
   BLEDevice::setMTU(185);
@@ -596,6 +714,10 @@ void startBle() {
   advertising->addServiceUUID(kBleServiceUuid);
   advertising->setScanResponse(true);
   BLEDevice::startAdvertising();
+  if (kUseBlePathTransport) {
+    xTaskCreatePinnedToCore(pathBleConnectionTask, "path-ble", 8192, nullptr, 1,
+                            nullptr, 0);
+  }
 }
 
 void readIoNode() {
@@ -725,7 +847,7 @@ void createUi() {
   lv_obj_set_style_bg_color(heartbeatDot, lv_color_hex(0x66D6B1), 0);
   lv_obj_clear_flag(heartbeatDot, LV_OBJ_FLAG_SCROLLABLE);
   heartbeatLabel = lv_label_create(screen);
-  lv_label_set_text(heartbeatLabel, "ESP-NOW  #0");
+  lv_label_set_text(heartbeatLabel, "PATH BLE");
   lv_obj_set_style_text_color(heartbeatLabel, lv_color_hex(0x92A0A5), 0);
   lv_obj_set_pos(heartbeatLabel, 399, 57);
   linkLabel = lv_label_create(screen);
@@ -787,7 +909,7 @@ void setup() {
   usbHost.onDeviceDisconnected([](const EspUsbHostDeviceInfo &) { ioNodeConnected = false; });
   ioNodeSerial.begin(115200);
   usbHost.begin();
-  startEspNow();
+  if (!kUseBlePathTransport) startEspNow();
   startBle();
   auto *board = new Board();
   board->init();
@@ -839,7 +961,7 @@ void loop() {
     lastPulseAt = now;
     lvgl_port_lock(-1);
     lv_obj_set_style_bg_color(heartbeatDot, lv_color_hex(0x66D6B1), 0);
-    lv_label_set_text_fmt(heartbeatLabel, "ESP-NOW  #%lu", espNowSequence);
+    lv_label_set_text(heartbeatLabel, "PATH BLE");
     lvgl_port_unlock();
   }
   const uint32_t espNowPeriod = urgentEspNowFrames > 0 ?
