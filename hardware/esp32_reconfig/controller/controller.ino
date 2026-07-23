@@ -87,9 +87,6 @@ String ioNodeBuffer;
 EspUsbHost usbHost;
 EspUsbHostCdcSerial ioNodeSerial(usbHost);
 volatile bool ioNodeConnected = false;
-volatile bool usbDevicePresent = false;
-volatile uint16_t usbDeviceVid = 0;
-volatile uint16_t usbDevicePid = 0;
 bool lastRenderedIoNodeConnected = false;
 WiFiUDP tsnUdp;
 IPAddress tsnPeerAddress;
@@ -1186,16 +1183,8 @@ void setup() {
   delay(300);
   frameMutex = xSemaphoreCreateMutex();
   assert(frameMutex != nullptr);
-  usbHost.onDeviceConnected([](const EspUsbHostDeviceInfo &info) {
-    usbDevicePresent = true;
-    usbDeviceVid = info.vid;
-    usbDevicePid = info.pid;
-    ioNodeConnected = info.supported;
-    Serial.printf("\n[USB] connected %04X:%04X supported=%d product=%s\n",
-                  info.vid, info.pid, info.supported, info.product);
-  });
+  usbHost.onDeviceConnected([](const EspUsbHostDeviceInfo &) { ioNodeConnected = true; });
   usbHost.onDeviceDisconnected([](const EspUsbHostDeviceInfo &) {
-    usbDevicePresent = false;
     ioNodeConnected = false;
     tsnPeerPort = 0;
   });
@@ -1255,16 +1244,7 @@ void loop() {
     lvgl_port_lock(-1);
     lv_label_set_text(heartbeatLabel, "PATH BLE");
     if (tsnDeviceValue != nullptr) {
-      if (ioNodeSerial.connected()) {
-        ioNodeConnected = true;
-        lv_label_set_text_fmt(tsnDeviceValue, "MUP1 READY  %04X:%04X", usbDeviceVid, usbDevicePid);
-      } else if (usbDevicePresent) {
-        ioNodeConnected = false;
-        lv_label_set_text_fmt(tsnDeviceValue, "USB DETECTED  %04X:%04X\nCDC NOT READY", usbDeviceVid, usbDevicePid);
-      } else {
-        ioNodeConnected = false;
-        lv_label_set_text(tsnDeviceValue, "WAITING FOR USB");
-      }
+      lv_label_set_text(tsnDeviceValue, ioNodeConnected ? "LAN96xx READY" : "WAITING FOR USB");
       lv_obj_set_style_text_color(tsnDeviceValue,
           lv_color_hex(ioNodeConnected ? 0x66D6B1 : 0xE0A65A), 0);
     }
