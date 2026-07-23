@@ -20,6 +20,7 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   var _labelsVisible = false;
   var _metricsVisible = true;
   var _pathPanelVisible = false;
+  var _shellOpacity = 0.15;
   _ScenarioDef _selectedScenario = _ScenarioDef.values.first;
 
   @override
@@ -185,14 +186,17 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               labelsVisible: _labelsVisible,
               metricsVisible: _metricsVisible,
               pathPanelVisible: _pathPanelVisible,
+              shellOpacity: _shellOpacity,
               mode: mode,
               onToggleLabels: _toggleLabels,
               onToggleMetrics: () =>
                   setState(() => _metricsVisible = !_metricsVisible),
               onTogglePathPanel: () =>
                   setState(() => _pathPanelVisible = !_pathPanelVisible),
-              onToggleShell: () =>
-                  ref.read(viewerServiceProvider).toggleMaterials(),
+              onShellOpacityChanged: (value) {
+                setState(() => _shellOpacity = value);
+                ref.read(viewerServiceProvider).setVehicleShellOpacity(value);
+              },
               onRecover: _recover,
             ),
           ),
@@ -265,8 +269,8 @@ class _TopBar extends StatelessWidget {
             _StatusPill(
               label: 'Path nodes',
               value: hardware.connected && hardware.pathNodes.isEmpty
-                  ? 'BLE gateway armed'
-                  : 'P1 ${hardware.pathNodes['PLEOS-PATH1'] == true ? 'ACK' : '--'}  ·  '
+                  ? 'P1/P2 via 7-inch'
+                  : 'via 7-inch · P1 ${hardware.pathNodes['PLEOS-PATH1'] == true ? 'ACK' : '--'}  ·  '
                         'P2 ${hardware.pathNodes['PLEOS-PATH2'] == true ? 'ACK' : '--'}',
               color: hardware.connected && hardware.pathNodes.isEmpty
                   ? const Color(0xFF0F766E)
@@ -762,22 +766,24 @@ class _BottomConsole extends StatelessWidget {
     required this.labelsVisible,
     required this.metricsVisible,
     required this.pathPanelVisible,
+    required this.shellOpacity,
     required this.mode,
     required this.onToggleLabels,
     required this.onToggleMetrics,
     required this.onTogglePathPanel,
-    required this.onToggleShell,
+    required this.onShellOpacityChanged,
     required this.onRecover,
   });
 
   final bool labelsVisible;
   final bool metricsVisible;
   final bool pathPanelVisible;
+  final double shellOpacity;
   final _ReconfigMode mode;
   final VoidCallback onToggleLabels;
   final VoidCallback onToggleMetrics;
   final VoidCallback onTogglePathPanel;
-  final VoidCallback onToggleShell;
+  final ValueChanged<double> onShellOpacityChanged;
   final VoidCallback onRecover;
 
   @override
@@ -809,10 +815,9 @@ class _BottomConsole extends StatelessWidget {
               active: pathPanelVisible,
               onTap: onTogglePathPanel,
             ),
-            _ToolButton(
-              icon: Icons.layers_rounded,
-              label: 'Vehicle shell',
-              onTap: onToggleShell,
+            _ShellOpacityControl(
+              value: shellOpacity,
+              onChanged: onShellOpacityChanged,
             ),
             _ToolButton(
               icon: Icons.verified_user_rounded,
@@ -822,6 +827,57 @@ class _BottomConsole extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ShellOpacityControl extends StatelessWidget {
+  const _ShellOpacityControl({required this.value, required this.onChanged});
+
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 210,
+      height: 36,
+      padding: const EdgeInsets.only(left: 9, right: 5),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFD0D5DD)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.layers_rounded, size: 16, color: Color(0xFF344054)),
+          const SizedBox(width: 5),
+          Text(
+            'Shell ${(value * 100).round()}%',
+            style: const TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF344054),
+            ),
+          ),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 2,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+              ),
+              child: Slider(
+                value: value,
+                min: 0,
+                max: 1,
+                divisions: 20,
+                onChanged: onChanged,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1213,11 +1269,7 @@ class _ScenarioDef {
       fusion: 'Path A + Path B + Rear',
       safetyGoal: 'Full network availability',
       mrmPolicy: 'standby',
-      metrics: [
-        'Three links normal',
-        'BLE GPIO ACK active',
-        'Recovery armed',
-      ],
+      metrics: ['Three links normal', 'BLE GPIO ACK active', 'Recovery armed'],
       reportMapping: ['3개 스위치 정상 경로 기준', 'NC pass-through 상태 검증'],
       switchTime: '0ms',
       latency: '1ms',

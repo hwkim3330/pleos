@@ -4,6 +4,7 @@ const String modelViewerScript = '''
 (() => {
     const CARPAINT_MATERIAL = 'roii';
     const TRANSLUCENT_MATERIALS = ['roii'];
+    const FRONT_AB_ROUTE_MATERIAL = 'FrontZC_split_switches';
     const CLAMP = (value, min, max) => Math.min(Math.max(value, min), max);
     const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
     const redEmissive = [5, 0, 0];
@@ -252,6 +253,7 @@ const String modelViewerScript = '''
 
         let trackedCarpaint = [];
         let trackedTranslucentParts = [];
+        let trackedFrontAbRoute = [];
         let trackedAlertParts = [];
         let isShowingParts = true;
         let isAlertActive = false;
@@ -264,6 +266,14 @@ const String modelViewerScript = '''
             if (!model) return;
             trackedCarpaint = findMaterialsByName(model, [CARPAINT_MATERIAL]);
             trackedTranslucentParts = findMaterialsByName(model, TRANSLUCENT_MATERIALS);
+            trackedFrontAbRoute = findMaterialsByName(model, [FRONT_AB_ROUTE_MATERIAL]);
+            trackedFrontAbRoute.forEach((entry) => {
+                entry.base = [0.086, 0.467, 1.0, 1.0];
+                entry.baseHex = '#1677ff';
+                materialBaselines.set(entry.material, [...entry.base]);
+                entry.pbr?.setBaseColorFactor?.([...entry.base]);
+                entry.material.setEmissiveFactor?.([0.02, 0.16, 0.45]);
+            });
             applyAlpha(trackedCarpaint, 0.15);
             setAlphaModeForEntries(trackedCarpaint, 'BLEND');
             applyAlpha(trackedTranslucentParts, isShowingParts ? 0.15 : 0);
@@ -383,6 +393,11 @@ const String modelViewerScript = '''
         if (viewer.model) hydrateMaterials();
 
         window.toggleMaterials = () => runPartsAnimation(!isShowingParts);
+        window.setVehicleShellOpacity = (value) => {
+            const opacity = CLAMP(Number(value), 0, 1);
+            applyAlpha([...trackedCarpaint, ...trackedTranslucentParts], opacity);
+            isShowingParts = opacity > 0;
+        };
 
         // JavaScript 준비 완료 플래그
         window.jsReady = true;

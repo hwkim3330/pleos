@@ -28,6 +28,11 @@ class ViewerService {
     await _controller?.runJavaScript('window.toggleMaterials?.()');
   }
 
+  Future<void> setVehicleShellOpacity(double opacity) async {
+    final value = opacity.clamp(0.0, 1.0).toStringAsFixed(3);
+    await _controller?.runJavaScript('window.setVehicleShellOpacity?.($value)');
+  }
+
   Future<void> switchOrbit() async {
     await _controller?.runJavaScript('window.switchOrbit?.()');
   }

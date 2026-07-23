@@ -30,15 +30,15 @@ const List<LabelHotspotConfig> labelHotspots = [
   LabelHotspotConfig(
     slotName: 'frontSwitchA',
     label: 'TSN-F A\nFront switch',
-    position: '-2.45m 7.5m 14m',
-    dataTarget: '-2.45m 4m 14m',
+    position: '2.45m 7.5m 14m',
+    dataTarget: '2.45m 4m 14m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   LabelHotspotConfig(
     slotName: 'frontSwitchB',
     label: 'TSN-F B\nFront switch',
-    position: '2.45m 7.5m 14m',
-    dataTarget: '2.45m 4m 14m',
+    position: '-2.45m 7.5m 14m',
+    dataTarget: '-2.45m 4m 14m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   LabelHotspotConfig(
@@ -58,15 +58,15 @@ const List<LabelHotspotConfig> labelHotspots = [
   LabelHotspotConfig(
     slotName: 'inlineEspAR',
     label: 'ESP-AR\nA - R inline',
-    position: '-1.25m 8m 5m',
-    dataTarget: '-1.25m 5.6m 5m',
+    position: '1.25m 8m 5m',
+    dataTarget: '1.25m 5.6m 5m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   LabelHotspotConfig(
     slotName: 'inlineEspBR',
     label: 'ESP-BR\nB - R inline',
-    position: '1.25m 8m 5m',
-    dataTarget: '1.25m 5.6m 5m',
+    position: '-1.25m 8m 5m',
+    dataTarget: '-1.25m 5.6m 5m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   LabelHotspotConfig(
@@ -143,13 +143,13 @@ class ErrorHotspotConfig {
 /// fault.target = material name으로 직접 사용
 const Map<String, ErrorHotspotConfig> errorHotspotConfigs = {
   'Path1Route': ErrorHotspotConfig(
-    position: '-1.25m 6m 5m',
-    dataTarget: '-1.25m -7m 5m',
+    position: '1.25m 6m 5m',
+    dataTarget: '1.25m -7m 5m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   'Path2Route': ErrorHotspotConfig(
-    position: '1.25m 6m 5m',
-    dataTarget: '1.25m -7m 5m',
+    position: '-1.25m 6m 5m',
+    dataTarget: '-1.25m -7m 5m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   'Path3Route': ErrorHotspotConfig(
@@ -158,13 +158,13 @@ const Map<String, ErrorHotspotConfig> errorHotspotConfigs = {
     dataOrbit: '135deg 45deg 2.5m',
   ),
   'FrontSwitchA': ErrorHotspotConfig(
-    position: '-2.45m 7m 14m',
-    dataTarget: '-2.45m -6m 14m',
+    position: '2.45m 7m 14m',
+    dataTarget: '2.45m -6m 14m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   'FrontSwitchB': ErrorHotspotConfig(
-    position: '2.45m 7m 14m',
-    dataTarget: '2.45m -6m 14m',
+    position: '-2.45m 7m 14m',
+    dataTarget: '-2.45m -6m 14m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   'RearSwitch': ErrorHotspotConfig(
