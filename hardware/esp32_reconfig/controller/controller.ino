@@ -4,6 +4,7 @@
 #include <BLEServer.h>
 #include <EspUsbHost.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <esp_display_panel.hpp>
 #include <esp_now.h>
 #include <esp_wifi.h>
@@ -34,6 +35,9 @@ constexpr uint8_t kPathNodeMacs[][ESP_NOW_ETH_ALEN] = {
 };
 constexpr bool kPhysicalOutputsEnabled = true;
 constexpr int kPath3RelayEnable = 6;
+constexpr char kTsnApSsid[] = "KETI-TSN-GATEWAY";
+constexpr char kTsnApPassword[] = "keti-tsn-9662";
+constexpr uint16_t kTsnUdpPort = 5683;
 constexpr char kBleDeviceName[] = "PLEOS-RECONFIG";
 constexpr char kBleServiceUuid[] = "7d2f0001-7c7a-4f7b-9b51-0af9a281d110";
 constexpr char kBleControlUuid[] = "7d2f0002-7c7a-4f7b-9b51-0af9a281d110";
@@ -70,6 +74,9 @@ lv_obj_t *heartbeatLabel;
 lv_obj_t *pathLines[3][2]{};
 lv_obj_t *switchNodes[3]{};
 lv_obj_t *sensorOverlay;
+lv_obj_t *tsnOverlay;
+lv_obj_t *tsnDeviceValue;
+lv_obj_t *tsnTrafficValue;
 uint32_t sequenceNumber = 0;
 uint32_t lastHeartbeat = 0;
 const char *effectiveMode = "TRIPLE";
@@ -81,6 +88,12 @@ EspUsbHost usbHost;
 EspUsbHostCdcSerial ioNodeSerial(usbHost);
 volatile bool ioNodeConnected = false;
 bool lastRenderedIoNodeConnected = false;
+WiFiUDP tsnUdp;
+IPAddress tsnPeerAddress;
+uint16_t tsnPeerPort = 0;
+uint32_t tsnRxBytes = 0;
+uint32_t tsnTxBytes = 0;
+uint32_t tsnLastTrafficAt = 0;
 BLECharacteristic *bleControl = nullptr;
 volatile bool bleConnected = false;
 volatile bool bleSnapshotPending = false;
@@ -751,7 +764,42 @@ void startBle() {
   }
 }
 
+void readTsnBridge() {
+  const int packetSize = tsnUdp.parsePacket();
+  if (packetSize > 0 && ioNodeConnected) {
+    tsnPeerAddress = tsnUdp.remoteIP();
+    tsnPeerPort = tsnUdp.remotePort();
+    uint8_t buffer[256];
+    int remaining = packetSize;
+    while (remaining > 0) {
+      const int count = tsnUdp.read(buffer, min(remaining, static_cast<int>(sizeof(buffer))));
+      if (count <= 0) break;
+      ioNodeSerial.write(buffer, count);
+      tsnRxBytes += count;
+      remaining -= count;
+    }
+    tsnLastTrafficAt = millis();
+  }
+
+  if (tsnPeerPort != 0 && ioNodeSerial.available()) {
+    uint8_t buffer[256];
+    size_t count = 0;
+    while (ioNodeSerial.available() && count < sizeof(buffer)) {
+      buffer[count++] = static_cast<uint8_t>(ioNodeSerial.read());
+    }
+    if (count > 0) {
+      tsnUdp.beginPacket(tsnPeerAddress, tsnPeerPort);
+      tsnUdp.write(buffer, count);
+      tsnUdp.endPacket();
+      tsnTxBytes += count;
+      tsnLastTrafficAt = millis();
+    }
+  }
+}
+
 void readIoNode() {
+  readTsnBridge();
+  if (tsnPeerPort != 0) return;
   while (ioNodeSerial.available()) {
     const char value = static_cast<char>(ioNodeSerial.read());
     if (value == '\n') {
@@ -762,6 +810,12 @@ void readIoNode() {
       ioNodeBuffer += value;
     }
   }
+}
+
+void startTsnGateway() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(kTsnApSsid, kTsnApPassword, kEspNowChannel, false, 2);
+  tsnUdp.begin(kTsnUdpPort);
 }
 
 void readCommands() {
@@ -942,6 +996,73 @@ void toggleSensorOverlay(lv_event_t *) {
   }
 }
 
+void toggleTsnOverlay(lv_event_t *) {
+  if (tsnOverlay == nullptr) return;
+  if (lv_obj_has_flag(tsnOverlay, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_clear_flag(tsnOverlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(tsnOverlay);
+  } else {
+    lv_obj_add_flag(tsnOverlay, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+lv_obj_t *makeModeButton(lv_obj_t *parent, const char *text, int x, int y);
+
+lv_obj_t *makeTsnButton(lv_obj_t *parent, const char *text, int x, int y) {
+  auto *button = makeModeButton(parent, text, x, y);
+  lv_obj_remove_event_cb(button, toggleSensorOverlay);
+  lv_obj_add_event_cb(button, toggleTsnOverlay, LV_EVENT_CLICKED, nullptr);
+  return button;
+}
+
+void createTsnOverlay(lv_obj_t *screen) {
+  tsnOverlay = lv_obj_create(screen);
+  lv_obj_set_pos(tsnOverlay, 18, 101);
+  lv_obj_set_size(tsnOverlay, 764, 286);
+  lv_obj_set_style_radius(tsnOverlay, 4, 0);
+  lv_obj_set_style_bg_color(tsnOverlay, lv_color_hex(0x101619), 0);
+  lv_obj_set_style_border_width(tsnOverlay, 1, 0);
+  lv_obj_set_style_border_color(tsnOverlay, lv_color_hex(0x2D383D), 0);
+  lv_obj_clear_flag(tsnOverlay, LV_OBJ_FLAG_SCROLLABLE);
+
+  auto *title = lv_label_create(tsnOverlay);
+  lv_label_set_text(title, "VELOCITYDRIVE TSN GATEWAY");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
+  lv_obj_set_pos(title, 20, 18);
+  auto *subtitle = lv_label_create(tsnOverlay);
+  lv_label_set_text(subtitle, "LAN9662  USB / MUP1     LAN9692  ETHERNET / COAP");
+  lv_obj_set_style_text_color(subtitle, lv_color_hex(0x7F8B91), 0);
+  lv_obj_set_pos(subtitle, 20, 52);
+
+  auto *deviceCaption = lv_label_create(tsnOverlay);
+  lv_label_set_text(deviceCaption, "USB TARGET");
+  lv_obj_set_style_text_color(deviceCaption, lv_color_hex(0x7F8B91), 0);
+  lv_obj_set_pos(deviceCaption, 20, 102);
+  tsnDeviceValue = lv_label_create(tsnOverlay);
+  lv_obj_set_style_text_font(tsnDeviceValue, &lv_font_montserrat_22, 0);
+  lv_obj_set_pos(tsnDeviceValue, 20, 126);
+
+  auto *networkCaption = lv_label_create(tsnOverlay);
+  lv_label_set_text(networkCaption, "MANAGEMENT AP");
+  lv_obj_set_style_text_color(networkCaption, lv_color_hex(0x7F8B91), 0);
+  lv_obj_set_pos(networkCaption, 270, 102);
+  auto *networkValue = lv_label_create(tsnOverlay);
+  lv_label_set_text(networkValue, "KETI-TSN-GATEWAY\n192.168.4.1 : 5683");
+  lv_obj_set_style_text_font(networkValue, &lv_font_montserrat_16, 0);
+  lv_obj_set_pos(networkValue, 270, 126);
+
+  auto *trafficCaption = lv_label_create(tsnOverlay);
+  lv_label_set_text(trafficCaption, "MUP1 TRAFFIC");
+  lv_obj_set_style_text_color(trafficCaption, lv_color_hex(0x7F8B91), 0);
+  lv_obj_set_pos(trafficCaption, 540, 102);
+  tsnTrafficValue = lv_label_create(tsnOverlay);
+  lv_obj_set_style_text_font(tsnTrafficValue, &lv_font_montserrat_16, 0);
+  lv_obj_set_pos(tsnTrafficValue, 540, 126);
+
+  makeTsnButton(tsnOverlay, "BACK TO NETWORK", 596, 222);
+  lv_obj_add_flag(tsnOverlay, LV_OBJ_FLAG_HIDDEN);
+}
+
 lv_obj_t *makeModeButton(lv_obj_t *parent, const char *text, int x, int y) {
   auto *button = lv_btn_create(parent);
   lv_obj_set_pos(button, x, y);
@@ -1020,7 +1141,8 @@ void createUi() {
   lv_obj_set_style_text_font(topologyLabel, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(topologyLabel, lv_color_hex(0x687178), 0);
   lv_obj_set_pos(topologyLabel, 18, 370);
-  makeModeButton(screen, "SENSORS", 654, 359);
+  makeModeButton(screen, "SENSORS", 518, 359);
+  makeTsnButton(screen, "TSN CONFIG", 654, 359);
 
   sensorOverlay = lv_obj_create(screen);
   lv_obj_set_pos(sensorOverlay, 18, 101);
@@ -1045,6 +1167,8 @@ void createUi() {
   makeSensorAction(sensorOverlay, "DUAL SENSOR", 488, 108, 5, 0xE0A65A);
   lv_obj_add_flag(sensorOverlay, LV_OBJ_FLAG_HIDDEN);
 
+  createTsnOverlay(screen);
+
   makePathAction(screen, "RECOVER ALL", 18, 394, 764, 7, 0x66D6B1);
   refreshUi();
 }
@@ -1060,9 +1184,13 @@ void setup() {
   frameMutex = xSemaphoreCreateMutex();
   assert(frameMutex != nullptr);
   usbHost.onDeviceConnected([](const EspUsbHostDeviceInfo &) { ioNodeConnected = true; });
-  usbHost.onDeviceDisconnected([](const EspUsbHostDeviceInfo &) { ioNodeConnected = false; });
+  usbHost.onDeviceDisconnected([](const EspUsbHostDeviceInfo &) {
+    ioNodeConnected = false;
+    tsnPeerPort = 0;
+  });
   ioNodeSerial.begin(115200);
   usbHost.begin();
+  startTsnGateway();
   if (!kUseBlePathTransport) startEspNow();
   startBle();
   auto *board = new Board();
@@ -1115,6 +1243,16 @@ void loop() {
     lastPulseAt = now;
     lvgl_port_lock(-1);
     lv_label_set_text(heartbeatLabel, "PATH BLE");
+    if (tsnDeviceValue != nullptr) {
+      lv_label_set_text(tsnDeviceValue, ioNodeConnected ? "LAN96xx READY" : "WAITING FOR USB");
+      lv_obj_set_style_text_color(tsnDeviceValue,
+          lv_color_hex(ioNodeConnected ? 0x66D6B1 : 0xE0A65A), 0);
+    }
+    if (tsnTrafficValue != nullptr) {
+      lv_label_set_text_fmt(tsnTrafficValue, "RX %lu B\nTX %lu B%s",
+          static_cast<unsigned long>(tsnRxBytes), static_cast<unsigned long>(tsnTxBytes),
+          millis() - tsnLastTrafficAt < 1500 ? "  LIVE" : "");
+    }
     lvgl_port_unlock();
   }
   const uint32_t espNowPeriod = urgentEspNowFrames > 0 ?

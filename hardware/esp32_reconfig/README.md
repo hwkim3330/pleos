@@ -8,6 +8,12 @@
 | `io_node` | Expandable sensor switch inputs and relay outputs | Locked by default |
 | `bridge` | macOS serial-CBOR to WebSocket gateway | No |
 
+## LAN9662 / LAN9692 TSN gateway
+
+The 7-inch controller also operates as a transparent VelocityDRIVE management gateway. Attach the LAN9662 management USB port to the 7-inch USB Host connector, join `KETI-TSN-GATEWAY` with password `keti-tsn-9662`, and run `keti-tsn-cli` with Wi-Fi transport at `192.168.4.1:5683`. The controller forwards MUP1 bytes unchanged between UDP and USB CDC and displays live RX/TX counters under `TSN CONFIG`.
+
+LAN9692 uses the same USB/MUP1 path for bootstrap. After applying an L3 IP address, enabling the CoAP server, saving configuration, and rebooting, switch the CLI dashboard to its LAN9692 Ethernet/CoAP profile. Path fault control remains independent of the TSN management gateway.
+
 ```text
 PLEOS Reconfig Studio <-> WebSocket <-> Mac BLE bridge
   <-> BLE GATT <-> 7-inch supervisor
