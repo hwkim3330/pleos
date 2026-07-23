@@ -35,7 +35,6 @@ constexpr uint8_t kPathNodeMacs[][ESP_NOW_ETH_ALEN] = {
 };
 constexpr bool kPhysicalOutputsEnabled = true;
 constexpr int kPath3RelayEnable = 6;
-constexpr int kUsbCanSelectExpanderPin = 5;
 constexpr char kTsnApSsid[] = "KETI-TSN-GATEWAY";
 constexpr char kTsnApPassword[] = "keti-tsn-9662";
 constexpr uint16_t kTsnUdpPort = 5683;
@@ -1187,13 +1186,6 @@ void setup() {
   delay(300);
   frameMutex = xSemaphoreCreateMutex();
   assert(frameMutex != nullptr);
-  auto *board = new Board();
-  board->init();
-  assert(board->begin());
-  // Waveshare EXIO5 is high for CAN and low for native USB D+/D-.
-  auto *expander = board->getIO_Expander()->getBase();
-  expander->digitalWrite(kUsbCanSelectExpanderPin, LOW);
-  delay(20);
   usbHost.onDeviceConnected([](const EspUsbHostDeviceInfo &info) {
     usbDevicePresent = true;
     usbDeviceVid = info.vid;
@@ -1212,6 +1204,8 @@ void setup() {
   startTsnGateway();
   if (!kUseBlePathTransport) startEspNow();
   startBle();
+  auto *board = new Board();
+  board->init();
 #if LVGL_PORT_AVOID_TEARING_MODE
   auto *lcd = board->getLCD();
   lcd->configFrameBufferNumber(LVGL_PORT_DISP_BUFFER_NUM);
@@ -1222,6 +1216,7 @@ void setup() {
   }
 #endif
 #endif
+  assert(board->begin());
   lvgl_port_init(board->getLCD(), board->getTouch());
   lvgl_port_lock(-1);
   createUi();
