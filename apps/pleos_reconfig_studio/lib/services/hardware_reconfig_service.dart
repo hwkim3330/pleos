@@ -92,15 +92,21 @@ class HardwareReconfigService {
           }
         }
       });
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 8));
-      await Future<void>.delayed(const Duration(seconds: 8));
+      // Scan in one long window and let the results listener connect the moment
+      // the controller appears, then retry almost immediately. The old shape --
+      // an 8 s scan followed by a fixed 8 s sleep and a 2 s retry gap -- spent
+      // most of its time not listening, so a controller that rebooted just
+      // after a scan window closed took over 20 s to be found. Measured 26 s to
+      // reconnect, during which every operator action was lost.
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 30));
+      await FlutterBluePlus.isScanning.where((scanning) => !scanning).first;
     } catch (_) {
       // Android Automotive emulators commonly expose no BLE adapter.
     } finally {
       _bleConnecting = false;
       if (!_disposed && _bleControl == null && !_gattConnecting) {
         _bleRetry?.cancel();
-        _bleRetry = Timer(const Duration(seconds: 2), _startBleScan);
+        _bleRetry = Timer(const Duration(milliseconds: 400), _startBleScan);
       }
     }
   }
@@ -217,7 +223,7 @@ class HardwareReconfigService {
     }
     if (!_disposed) {
       _bleRetry?.cancel();
-      _bleRetry = Timer(const Duration(seconds: 2), _startBleScan);
+      _bleRetry = Timer(const Duration(milliseconds: 400), _startBleScan);
     }
   }
 

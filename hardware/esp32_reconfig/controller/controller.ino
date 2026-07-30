@@ -109,7 +109,7 @@ volatile int8_t pathLocalLevel[2] = {-1, -1};
 volatile bool pathAlertPending = false;
 volatile int8_t pathAlertIndex = -1;
 volatile long pathAlertSeqSeen[2] = {-1, -1};
-volatile bool pathReleasePending = false;
+volatile bool pathForceNext[2] = {false, false};
 constexpr uint32_t kPathReadPeriodMs = 250;
 // Nodes are polled alternately, so each is read every 500 ms; six misses is
 // about three seconds of silence before the link is treated as half open.
@@ -280,12 +280,18 @@ void sendEspNowState() {
       // and we would reissue the same command every 250 ms.
       if (pathLocalOwned[index]) continue;
       const uint8_t desired = channels[index].health == Health::healthy ? 0 : 1;
-      if (pathBleApplied[index] == desired || now - pathBleCommandAt[index] < 250) continue;
+      const bool force = pathForceNext[index];
+      // A forced write must not be rate limited or skipped as already-applied:
+      // its whole purpose is to overrule what the node currently holds.
+      if (!force &&
+          (pathBleApplied[index] == desired || now - pathBleCommandAt[index] < 250)) continue;
       const uint32_t commandId = ++pathBleCommandId[index];
-      const String command = String("!SET:") + commandId + ":" +
-                             (desired ? "FAULT" : "SAFE");
+      const String command = force
+          ? String("!FORCE:") + commandId + ":" + (desired ? "FAULT" : "SAFE")
+          : String("!SET:") + commandId + ":" + (desired ? "FAULT" : "SAFE");
       if (pathBleControls[index]->writeValue(command, true)) {
         pathBleCommandAt[index] = now;
+        pathForceNext[index] = false;
       }
     }
     return;
@@ -484,25 +490,19 @@ bool applyPathHighlight() {
 // supervisor out of recovering that path, which is exactly backwards for a
 // safety surface. Routine 250 ms state sync still respects local ownership; only
 // deliberate actions break it.
-// Called from LVGL event callbacks, so it must not block: a GATT write with
-// response can take tens of milliseconds and would stall the UI task twice per
-// tap. The bookkeeping is cheap and happens now; loop() sends the writes.
+// Marks a latched node as needing its latch broken. Only nodes that actually
+// hold local ownership are touched: releasing one that was never latched used to
+// push !RECOVER at it, which drove the relay to pass-through and then straight
+// back to the commanded state, so every press produced a visible
+// FAULT -> READY -> FAULT bounce and briefly closed a path meant to stay open.
+// The break is folded into the next state write as !FORCE: so it costs one
+// message instead of a recover-then-set round trip.
 void forcePathRelease() {
   for (size_t index = 0; index < 2; ++index) {
+    if (!pathLocalOwned[index]) continue;
     pathLocalOwned[index] = false;
     pathLocalLevel[index] = -1;
-    pathBleApplied[index] = 0xFF;
-    pathBleCommandAt[index] = 0;
-  }
-  pathReleasePending = true;
-}
-
-void servicePathRelease() {
-  if (!pathReleasePending) return;
-  pathReleasePending = false;
-  for (size_t index = 0; index < 2; ++index) {
-    if (pathBleControls[index] == nullptr || !pathBleConnected[index]) continue;
-    pathBleControls[index]->writeValue(String("!RECOVER"), true);
+    pathForceNext[index] = true;
   }
 }
 
@@ -765,7 +765,17 @@ void applyPathStatus(size_t index, const String &message) {
   const int second = message.indexOf(':', first + 1);
   const String levelText = second < 0 ? message.substring(first + 1)
                                       : message.substring(first + 1, second);
-  const int8_t level = levelText == "NORMAL" ? 0 : 1;
+  // Fail safe on an unrecognised level instead of assuming FAULT. Adopting a
+  // bogus level would drive channels[] and, through the sync path, the node's
+  // relay pin. Ignoring the read leaves the last known good state in place.
+  int8_t level;
+  if (levelText == "NORMAL") {
+    level = 0;
+  } else if (levelText == "ISOLATED") {
+    level = 1;
+  } else {
+    return;
+  }
   const bool wasOwned = pathLocalOwned[index];
   pathBleApplied[index] = level;
   pathAckAt[index] = millis();
@@ -875,6 +885,7 @@ class PathBleClientCallbacks final : public BLEClientCallbacks {
     pathLocalLevel[index_] = -1;
     // Re-baseline on reconnect so the first poll does not look like an alert.
     pathAlertSeqSeen[index_] = -1;
+    pathForceNext[index_] = false;
     pathAckPending = true;
   }
 
@@ -1321,8 +1332,6 @@ void setup() {
 void loop() {
   readCommands();
   readIoNode();
-  // Deferred from the LVGL task so a card tap never waits on two GATT writes.
-  servicePathRelease();
   if (bleSnapshotPending) {
     bleSnapshotPending = false;
     lvgl_port_lock(-1);

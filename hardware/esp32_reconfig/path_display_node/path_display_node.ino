@@ -30,7 +30,11 @@ constexpr uint32_t kCommandWatchdogMs = 10000;
 constexpr uint32_t kHeartbeatMs = 1000;
 constexpr uint32_t kAckPeriodMs = 600 + (PLEOS_PATH_INDEX * 250);
 constexpr uint32_t kUiRefreshMs = 200;
+// A glitch on a button pin must not actuate an external relay, so a reading has
+// to hold steady this long before it counts as a press. GPIO0 is also the boot
+// strapping pin, which makes it the more exposed of the two.
 constexpr uint32_t kButtonDebounceMs = 40;
+constexpr uint32_t kButtonStableMs = 120;
 constexpr bool kUseBleController = true;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
@@ -56,6 +60,11 @@ bool injectButtonHigh = true;
 bool recoverButtonHigh = true;
 uint32_t injectButtonChangedAt = 0;
 uint32_t recoverButtonChangedAt = 0;
+// Candidate readings, only promoted to accepted after kButtonStableMs.
+bool injectCandidate = true;
+bool recoverCandidate = true;
+uint32_t injectCandidateAt = 0;
+uint32_t recoverCandidateAt = 0;
 // The upper button latches: one tap toggles the relay and gives the local
 // operator ownership of this node until the lower button releases it. Holding
 // is no longer required, and the latch is reported upstream so the 7-inch
@@ -117,6 +126,18 @@ uint16_t crc16(const uint8_t *data, size_t length) {
 // enables notifications. The controller therefore polls this characteristic by
 // read instead, which uses the value handle and needs no descriptor discovery.
 constexpr uint32_t kNotifyGapMs = 8;
+
+// GPIO27 drives a relay that opens a live Ethernet pair, so every parse that can
+// reach it must fail SAFE. Only the two exact words are accepted; anything else
+// -- a truncated write, a corrupted byte, an unknown verb -- returns -1 and the
+// caller leaves the relay alone. The previous form was
+// `(text == "SAFE") ? 0 : 1`, which asserted the relay for any unrecognised
+// input, i.e. it failed dangerous.
+int8_t parseLevel(const String &text) {
+  if (text == "SAFE" || text == "NORMAL") return 0;
+  if (text == "FAULT" || text == "ISOLATED") return 1;
+  return -1;
+}
 
 String statusValue() {
   return String("!LOCAL:") + (localLatched ? "1" : "0") + ":" +
@@ -261,6 +282,9 @@ void publish() {
   sendBleSnapshot("channel");
 }
 
+// Every transition of the external relay pin is logged with the source that
+// asked for it. GPIO27 drives real hardware, so if it ever moves without an
+// operator or controller command, the log says who did it.
 void setIsolated(bool value) {
   if (isolated == value) {
     // No change, but keep the polled value fresh.
@@ -269,6 +293,8 @@ void setIsolated(bool value) {
   }
   isolated = value;
   digitalWrite(kRelayEnable, isolated ? HIGH : LOW);
+  Serial.printf("!RELAY:%s:src=%s:t=%lu\n", isolated ? "HIGH" : "LOW",
+                commandSource, static_cast<unsigned long>(millis()));
   ringRedrawPending = true;
   drawLiveMetrics();
   publish();
@@ -321,7 +347,9 @@ void processCommand(String command) {
   const int separator = command.indexOf(':', 9);
   if (separator < 0) return;
   if (command.substring(9, separator) != kChannelIds[PLEOS_PATH_INDEX]) return;
-  setIsolated(command.substring(separator + 1) != "NORMAL");
+  const int8_t level = parseLevel(command.substring(separator + 1));
+  if (level < 0) return;
+  setIsolated(level == 1);
 }
 
 void onEspNowReceive(const esp_now_recv_info_t *, const uint8_t *data, int length) {
@@ -392,8 +420,24 @@ class PathControlCallbacks final : public BLECharacteristicCallbacks {
     if (command.startsWith("!SET:")) {
       const int separator = command.indexOf(':', 5);
       if (separator > 5) {
+        const int8_t level = parseLevel(command.substring(separator + 1));
+        if (level < 0) return;
         pendingBleCommandId = command.substring(5, separator).toInt();
-        pendingBleCommand = command.substring(separator + 1) == "SAFE" ? 0 : 1;
+        pendingBleCommand = level;
+      }
+      return;
+    }
+    // Break the local latch and apply the level in one step. Doing it as
+    // !RECOVER followed by !SET: made the relay visit pass-through on the way,
+    // which showed up as a FAULT -> READY -> FAULT bounce on the display.
+    if (command.startsWith("!FORCE:")) {
+      const int separator = command.indexOf(':', 7);
+      if (separator > 7) {
+        const int8_t level = parseLevel(command.substring(separator + 1));
+        if (level < 0) return;
+        pendingBleCommandId = command.substring(7, separator).toInt();
+        pendingBleCommand = level;
+        pendingForceRelease = true;
       }
       return;
     }
@@ -407,7 +451,8 @@ class PathControlCallbacks final : public BLECharacteristicCallbacks {
     } else if (command.startsWith("!CHANNEL:")) {
       const int separator = command.indexOf(':', 9);
       if (separator >= 0 && command.substring(9, separator) == kChannelIds[PLEOS_PATH_INDEX]) {
-        pendingBleCommand = command.substring(separator + 1) == "NORMAL" ? 0 : 1;
+        const int8_t level = parseLevel(command.substring(separator + 1));
+        if (level >= 0) pendingBleCommand = level;
       }
     }
   }
@@ -451,7 +496,16 @@ void pollButtons() {
   const uint32_t now = millis();
 
   // Upper button (GPIO0): tap to toggle the relay and take local ownership.
-  const bool injectHigh = digitalRead(kInjectButton) != LOW;
+  // Debounce, then require the new level to persist before acting, so a spike
+  // cannot drive GPIO27 and the external relay on its own.
+  const bool injectRaw = digitalRead(kInjectButton) != LOW;
+  if (injectRaw != injectCandidate) {
+    injectCandidate = injectRaw;
+    injectCandidateAt = now;
+  }
+  const bool injectHigh = (now - injectCandidateAt >= kButtonStableMs)
+                              ? injectCandidate
+                              : injectButtonHigh;
   if (injectHigh != injectButtonHigh && now - injectButtonChangedAt >= kButtonDebounceMs) {
     injectButtonHigh = injectHigh;
     injectButtonChangedAt = now;
@@ -469,7 +523,14 @@ void pollButtons() {
   // the network and raises a "this is Path N" alert on the 7-inch and the
   // tablet, so the two buttons have plainly different jobs: the upper one is
   // the relay, the lower one is control and attention.
-  const bool recoverHigh = digitalRead(kRecoverButton) != LOW;
+  const bool recoverRaw = digitalRead(kRecoverButton) != LOW;
+  if (recoverRaw != recoverCandidate) {
+    recoverCandidate = recoverRaw;
+    recoverCandidateAt = now;
+  }
+  const bool recoverHigh = (now - recoverCandidateAt >= kButtonStableMs)
+                               ? recoverCandidate
+                               : recoverButtonHigh;
   if (recoverHigh != recoverButtonHigh && now - recoverButtonChangedAt >= kButtonDebounceMs) {
     recoverButtonHigh = recoverHigh;
     recoverButtonChangedAt = now;
@@ -517,17 +578,22 @@ void loop() {
     bleDisconnectPending = false;
     recoverSafe();
   }
+  const int8_t bleCommand = pendingBleCommand;
   if (pendingForceRelease) {
     pendingForceRelease = false;
     localLatched = false;
     lastCommandAt = millis();
     commandSource = "BLE";
-    setIsolated(false);
-    publishStatusValue();
     ringRedrawPending = true;
-    drawLiveMetrics();
+    // Only fall back to pass-through when no level came with the release, as
+    // happens for a bare !RECOVER. Otherwise the command below applies it and
+    // the relay never visits an intermediate state.
+    if (bleCommand < 0) {
+      setIsolated(false);
+      publishStatusValue();
+      drawLiveMetrics();
+    }
   }
-  const int8_t bleCommand = pendingBleCommand;
   if (bleCommand >= 0) {
     // Latch the id before acting: a second !SET: landing in the BLE callback
     // would otherwise make us echo an id the controller no longer recognises.
