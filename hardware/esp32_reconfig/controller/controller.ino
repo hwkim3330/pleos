@@ -1186,15 +1186,17 @@ void createUi() {
   lv_obj_set_style_bg_color(screen, lv_color_hex(0x0B0F11), 0);
   lv_obj_set_style_text_color(screen, lv_color_hex(0xF4F7F7), 0);
 
+  // KETI and PLEOS RECONFIG share one size and one baseline so the header reads
+  // as a single wordmark instead of two mismatched labels.
   auto *keti = lv_label_create(screen);
   lv_label_set_text(keti, "KETI");
-  lv_obj_set_style_text_font(keti, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_font(keti, &lv_font_montserrat_22, 0);
   lv_obj_set_style_text_color(keti, lv_color_hex(0x4DA3FF), 0);
-  lv_obj_set_pos(keti, 18, 20);
+  lv_obj_set_pos(keti, 18, 15);
   auto *title = lv_label_create(screen);
   lv_label_set_text(title, "PLEOS RECONFIG");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
-  lv_obj_set_pos(title, 76, 15);
+  lv_obj_set_pos(title, 90, 15);
   modeLabel = lv_label_create(screen);
   lv_obj_set_style_text_font(modeLabel, &lv_font_montserrat_16, 0);
   lv_obj_align(modeLabel, LV_ALIGN_TOP_RIGHT, -18, 19);

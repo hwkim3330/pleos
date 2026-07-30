@@ -75,7 +75,13 @@
 #define LVGL_PORT_AVOID_TEARING_MODE            (CONFIG_LVGL_PORT_AVOID_TEARING_MODE)
                                                         // Valid if using ESP-IDF
 #else
-#define LVGL_PORT_AVOID_TEARING_MODE            (0)     // Valid if using Arduino
+// Mode 3 (double buffer + LVGL direct mode) is the vendor's recommendation and
+// is what stops the RGB panel scanning a framebuffer LVGL is still drawing into.
+// With mode 0 every redraw left horizontal streaks trailing under freshly drawn
+// text. Direct mode is preferred over the full-refresh modes because this UI
+// invalidates small areas often (the path highlight animates at ~9 Hz) and
+// full-refresh would repaint all 1024x600 each time.
+#define LVGL_PORT_AVOID_TEARING_MODE            (3)     // Valid if using Arduino
 #endif
 
 #if LVGL_PORT_AVOID_TEARING_MODE != 0
