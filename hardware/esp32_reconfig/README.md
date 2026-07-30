@@ -33,6 +33,22 @@ Use USB CBOR only for maintenance:
   --transport serial --serial /dev/cu.usbmodem59580282341
 ```
 
+### Runs on power alone
+
+The three boards must work with **nothing but power connected** — no host, no
+serial, no bridge. Nothing in the demo path depends on a host: the controller's
+framed-CBOR output goes to a hardware UART, so it never blocks when no one is
+reading, and the tablet reaches the controller directly over BLE. The bridge and
+the serial bench commands are extra tools, never dependencies.
+
+One consequence worth knowing while debugging: **opening the controller's serial
+port resets the board.** Every host attach shows `uptime` restarting, which drops
+both path nodes to `WAIT` for a few seconds until the controller rescans and
+reconnects. That is an artifact of attaching a host, not a field fault.
+
+After a controller restart both nodes are reconnected and polled within about
+five seconds.
+
 ### Confirmed demo path
 
 The confirmed configuration is **three ESP32 boards** — the 7-inch supervisor
@@ -157,7 +173,24 @@ The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first bo
   /dev/cu.usbserial-XXXXXXXX PATH2
 ```
 
-Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass and show `WAITING` until their first controller command. A circular heartbeat shows command age and uses the current state color without full-screen redraw. `SOURCE` identifies `BLE`, `LATCH` (local button holds the node), `LOCAL` (local release), `NOW`, or fail-safe `SAFE` control.
+Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC
+bypass. The large state word distinguishes four cases, so "no controller" is
+never confused with "controller attached but not talking to me" or with a real
+injected fault:
+
+| State | Colour | Meaning |
+| --- | --- | --- |
+| `WAIT` | orange | No BLE client attached |
+| `SYNC` | yellow | Controller attached, no status poll yet |
+| `READY` | green | Being polled, relay in NC pass-through |
+| `FAULT` | red | Relay open, pair isolated |
+
+If a link reports connected but stops answering reads, the controller treats it
+as half open after about three seconds of silence and drops it so the scan task
+reconnects; without that a node could sit on `SYNC` indefinitely. While a node is
+missing the controller rescans every 250 ms instead of once per second.
+
+A circular heartbeat shows command age and uses the current state color without full-screen redraw. `SOURCE` identifies `BLE`, `LATCH` (local button holds the node), `LOCAL` (local release), `NOW`, or fail-safe `SAFE` control.
 
 Both user controls are on the display's left edge and are **latching taps**; no
 hold is required.

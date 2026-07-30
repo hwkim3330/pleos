@@ -165,8 +165,21 @@ void sendBleSnapshot(const char *event) {
   publishStatusValue();
 }
 
+// Four distinct states, so "no controller" is never confused with "controller
+// present but not yet talking to me" or with an actual injected fault. Standing
+// at the bench you can tell which of those you are looking at.
+const char *stateName() {
+  if (isolated) return "FAULT";
+  if (controllerOnline) return "READY";
+  if (bleConnected) return "SYNC";
+  return "WAIT";
+}
+
 uint16_t statusColor() {
-  return !controllerOnline ? ST77XX_ORANGE : isolated ? ST77XX_RED : ST77XX_GREEN;
+  if (isolated) return ST77XX_RED;
+  if (controllerOnline) return ST77XX_GREEN;
+  if (bleConnected) return ST77XX_YELLOW;
+  return ST77XX_ORANGE;
 }
 
 void printCentered(const char *text, int16_t centerX, int16_t baselineY, uint8_t size,
@@ -205,8 +218,7 @@ void drawLiveMetrics() {
   previousRingHead = head;
 
   display.fillRect(57, 61, 176, 31, ST77XX_BLACK);
-  const char *state = !controllerOnline ? "WAIT" : isolated ? "FAULT" : "READY";
-  printCentered(state, 145, 65, 3, accent);
+  printCentered(stateName(), 145, 65, 3, accent);
 
   display.fillRect(62, 108, 166, 19, ST77XX_BLACK);
   char footer[40];
@@ -535,6 +547,10 @@ void loop() {
   if (bleSnapshotPending) {
     bleSnapshotPending = false;
     sendBleSnapshot("connected");
+    // A client just attached: leave WAIT for SYNC immediately rather than
+    // waiting for the first poll to land.
+    ringRedrawPending = true;
+    drawLiveMetrics();
   }
   // Now that polling is a heartbeat, the watchdog protects the BLE transport
   // too: if the controller dies without a clean disconnect, the pair returns to

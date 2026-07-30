@@ -110,8 +110,12 @@ volatile bool pathAlertPending = false;
 volatile int8_t pathAlertIndex = -1;
 volatile long pathAlertSeqSeen[2] = {-1, -1};
 constexpr uint32_t kPathReadPeriodMs = 250;
+// Nodes are polled alternately, so each is read every 500 ms; six misses is
+// about three seconds of silence before the link is treated as half open.
+constexpr uint8_t kPathReadFailLimit = 6;
 uint32_t lastPathReadAt = 0;
 size_t pathReadIndex = 0;
+uint8_t pathReadFailures[2] = {0, 0};
 // Identify effect: the lower button on a path node makes that path pulse on the
 // topology map so the operator can see which physical node they are holding.
 constexpr uint32_t kHighlightMs = 3000;
@@ -757,7 +761,19 @@ void pollPathStatus(size_t index) {
   if (index > 1 || !pathBleConnected[index] || pathBleControls[index] == nullptr) return;
   if (!pathBleControls[index]->canRead()) return;
   const String value = pathBleControls[index]->readValue();
-  if (value.startsWith("!LOCAL:")) applyPathStatus(index, value);
+  if (value.startsWith("!LOCAL:")) {
+    pathReadFailures[index] = 0;
+    applyPathStatus(index, value);
+    return;
+  }
+  // A link that reports connected but stops answering reads is half open, which
+  // would otherwise persist forever and leave the node stuck showing SYNC. Drop
+  // it so pathBleConnectionTask reconnects.
+  if (++pathReadFailures[index] < kPathReadFailLimit) return;
+  pathReadFailures[index] = 0;
+  lastEvent = index == 0 ? "Path 1 link stale, reconnecting"
+                         : "Path 2 link stale, reconnecting";
+  if (pathBleClients[index] != nullptr) pathBleClients[index]->disconnect();
 }
 
 void onPathBleNotify(BLERemoteCharacteristic *characteristic, uint8_t *data,
@@ -887,6 +903,10 @@ void pathBleConnectionTask(void *) {
       }
       scan->clearResults();
       if (!bleConnected) BLEDevice::startAdvertising();
+      // Keep retrying briskly while a node is missing; a path node that is
+      // powered but unreachable is the one state nobody can fix from the UI.
+      vTaskDelay(pdMS_TO_TICKS(250));
+      continue;
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
