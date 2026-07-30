@@ -172,9 +172,26 @@ the lower one is control and attention:
 
 Because the upper button toggles in both directions, the lower button is not
 needed to clear a fault; its purpose is handing control back and identifying
-which physical node you are standing at. The alert travels as `!ALERT:n` to the
-controller, which forwards it as `!EVENT:path_alert_n`; the tablet raises it as
-a snack bar.
+which physical node you are standing at. While a node is latched the controller
+stops commanding it, so releasing control is a real action rather than a second
+way to clear a fault.
+
+The identify effect pulses that path's topology lines and card on the 7-inch for
+three seconds, and the tablet vibrates, chimes and raises a banner naming the
+path.
+
+An edge event cannot survive a polled transport on its own, so the node carries
+an **alert counter** in its status value instead:
+
+```text
+!LOCAL:<owned>:<level>:<alertSeq>
+```
+
+The lower button increments `alertSeq`; the controller treats a *change* in the
+polled value as the alert. The first observation only establishes a baseline, so
+reconnecting never fires a spurious identify. To exercise the effect without the
+physical button, send the bench command `!ALERT` to a node over serial at 115200
+baud.
 
 ### Node status is polled, not notified
 

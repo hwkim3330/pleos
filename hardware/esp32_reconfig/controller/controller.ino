@@ -108,6 +108,7 @@ volatile int8_t pathLocalReport[2] = {-1, -1};
 volatile int8_t pathLocalLevel[2] = {-1, -1};
 volatile bool pathAlertPending = false;
 volatile int8_t pathAlertIndex = -1;
+volatile long pathAlertSeqSeen[2] = {-1, -1};
 constexpr uint32_t kPathReadPeriodMs = 250;
 uint32_t lastPathReadAt = 0;
 size_t pathReadIndex = 0;
@@ -718,11 +719,14 @@ class ReconfigControlCallbacks final : public BLECharacteristicCallbacks {
 // Parses a node's "!LOCAL:<owned>:<level>" status, whether it arrived by polled
 // read or by notification, and wakes loop() only when something changed.
 void applyPathStatus(size_t index, const String &message) {
-  const int separator = message.indexOf(':', 7);
-  if (separator < 0) return;
-  const bool isolatedNow = message.substring(separator + 1) != "NORMAL";
-  const bool ownedNow = message.substring(7, separator) == "1";
-  const int8_t level = isolatedNow ? 1 : 0;
+  // !LOCAL:<owned>:<level>[:<alertSeq>]
+  const int first = message.indexOf(':', 7);
+  if (first < 0) return;
+  const bool ownedNow = message.substring(7, first) == "1";
+  const int second = message.indexOf(':', first + 1);
+  const String levelText = second < 0 ? message.substring(first + 1)
+                                      : message.substring(first + 1, second);
+  const int8_t level = levelText == "NORMAL" ? 0 : 1;
   pathBleApplied[index] = level;
   pathAckAt[index] = millis();
   if (ownedNow != pathLocalOwned[index] || level != pathLocalLevel[index]) {
@@ -730,6 +734,19 @@ void applyPathStatus(size_t index, const String &message) {
     pathLocalLevel[index] = level;
     pathLocalReport[index] = level;
     pathLocalPending = true;
+  }
+  if (second < 0) return;
+  // The lower button is an edge event, and edges cannot survive a polled
+  // transport on their own. The node carries a counter instead, and a change in
+  // it is the alert. The first observation only establishes a baseline, so
+  // reconnecting does not fire a spurious identify.
+  const long sequence = message.substring(second + 1).toInt();
+  if (pathAlertSeqSeen[index] < 0) {
+    pathAlertSeqSeen[index] = sequence;
+  } else if (sequence != pathAlertSeqSeen[index]) {
+    pathAlertSeqSeen[index] = sequence;
+    pathAlertIndex = static_cast<int8_t>(index);
+    pathAlertPending = true;
   }
 }
 
@@ -794,6 +811,8 @@ class PathBleClientCallbacks final : public BLEClientCallbacks {
     pathLocalOwned[index_] = false;
     pathLocalReport[index_] = -1;
     pathLocalLevel[index_] = -1;
+    // Re-baseline on reconnect so the first poll does not look like an alert.
+    pathAlertSeqSeen[index_] = -1;
     pathAckPending = true;
   }
 

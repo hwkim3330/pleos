@@ -62,6 +62,10 @@ uint32_t recoverButtonChangedAt = 0;
 // is no longer required, and the latch is reported upstream so the 7-inch
 // controller and the tablet follow the relay instead of diverging from it.
 bool localLatched = false;
+// Bumped by the lower button. Carried in the polled status value because
+// notifications never reach the controller, so a counter the controller can
+// diff is the only way an edge event survives the trip.
+uint32_t alertSeq = 0;
 uint32_t lastNowSequence = 0;
 uint32_t lastNowReceiveAt = 0;
 volatile bool espNowPending = false;
@@ -116,7 +120,7 @@ constexpr uint32_t kNotifyGapMs = 8;
 
 String statusValue() {
   return String("!LOCAL:") + (localLatched ? "1" : "0") + ":" +
-         (isolated ? "ISOLATED" : "NORMAL");
+         (isolated ? "ISOLATED" : "NORMAL") + ":" + alertSeq;
 }
 
 // Keep the characteristic value equal to the current status at all times, so a
@@ -283,6 +287,13 @@ void processCommand(String command) {
     setIsolated(false);
     return;
   }
+  // Bench affordance: exercise the identify effect without the physical button.
+  if (command == "!ALERT") {
+    ++alertSeq;
+    publishStatusValue();
+    notifyAlert();
+    return;
+  }
   if (!command.startsWith("!CHANNEL:")) return;
   const int separator = command.indexOf(':', 9);
   if (separator < 0) return;
@@ -440,6 +451,7 @@ void pollButtons() {
       localLatched = false;
       lastCommandAt = now;
       commandSource = "LOCAL";
+      ++alertSeq;
       setIsolated(false);
       notifyLocalOwnership();
       notifyAlert();
