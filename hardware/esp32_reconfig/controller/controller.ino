@@ -766,13 +766,24 @@ void applyPathStatus(size_t index, const String &message) {
   const String levelText = second < 0 ? message.substring(first + 1)
                                       : message.substring(first + 1, second);
   const int8_t level = levelText == "NORMAL" ? 0 : 1;
+  const bool wasOwned = pathLocalOwned[index];
   pathBleApplied[index] = level;
   pathAckAt[index] = millis();
-  if (ownedNow != pathLocalOwned[index] || level != pathLocalLevel[index]) {
+  if (ownedNow != wasOwned || level != pathLocalLevel[index]) {
     pathLocalOwned[index] = ownedNow;
     pathLocalLevel[index] = level;
-    pathLocalReport[index] = level;
-    pathLocalPending = true;
+    // Who is the authority matters. While a node owns its relay by local latch,
+    // its report is the truth and must rewrite channel state. When the
+    // controller is the authority, it must not: a poll that catches the node
+    // before it has applied a just-sent command would otherwise adopt the old
+    // level and cancel the operator's command outright. The release tap is the
+    // one exception, because handing control back means returning to normal.
+    if (ownedNow || wasOwned) {
+      pathLocalReport[index] = level;
+      pathLocalPending = true;
+    } else {
+      pathAckPending = true;
+    }
   }
   if (second < 0) return;
   // The lower button is an edge event, and edges cannot survive a polled
