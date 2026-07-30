@@ -277,8 +277,12 @@ void sendEspNowState() {
     for (size_t index = 0; index < 2; ++index) {
       if (!pathBleConnected[index] || pathBleControls[index] == nullptr) continue;
       // Do not fight a node whose own buttons own it; it would refuse anyway
-      // and we would reissue the same command every 250 ms.
-      if (pathLocalOwned[index]) continue;
+      // and we would reissue the same command every 250 ms. A pending forced
+      // write is the exception and must get through: polling re-reads the node's
+      // "still latched" report and restores pathLocalOwned, so without this the
+      // force could never be sent and the node stayed latched forever with its
+      // relay stuck HIGH.
+      if (pathLocalOwned[index] && !pathForceNext[index]) continue;
       const uint8_t desired = channels[index].health == Health::healthy ? 0 : 1;
       const bool force = pathForceNext[index];
       // A forced write must not be rate limited or skipped as already-applied:
