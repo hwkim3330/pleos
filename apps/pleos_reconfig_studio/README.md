@@ -26,9 +26,14 @@ flutter pub get
 flutter analyze
 flutter test
 flutter build apk --debug
-adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk
-adb -s emulator-5554 shell am start \
-  -n com.hwkim3330.pleosreconfigstudio/.MainActivity
+adb install -r build/app/outputs/flutter-apk/app-debug.apk
+adb shell am start \
+  -n com.keti.pleos.reconfig/com.hwkim3330.pleosreconfigstudio.MainActivity
 ```
+
+The applicationId (`com.keti.pleos.reconfig`) deliberately differs from the
+Kotlin namespace so this build installs alongside a copy signed with a different
+debug keystore instead of failing with INSTALL_FAILED_UPDATE_INCOMPATIBLE. That
+is why the launch command needs the fully qualified activity class.
 
 The emulator reaches the Mac bridge at `ws://10.0.2.2:8766`. The model rotates only when dragged and supports pinch/wheel zoom; automatic rotation is disabled. `Safe bypass` means no USB inline injector is armed. Physical relay actuation is disabled by default and must remain disabled until the normally-closed relay PCB and watchdog behavior are verified.

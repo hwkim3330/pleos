@@ -17,6 +17,10 @@ BLE_CONTROL = "7d2f0002-7c7a-4f7b-9b51-0af9a281d110"
 PATH_SERVICE = "7d2f0011-7c7a-4f7b-9b51-0af9a281d110"
 PATH_CONTROL = "7d2f0012-7c7a-4f7b-9b51-0af9a281d110"
 PATH_NODES = {"PLEOS-PATH1": "tsn_front_a", "PLEOS-PATH2": "tsn_front_b"}
+# The controller's CBOR frame keys path nodes "1"/"2"; the BLE transport and the
+# app both key them by advertised name. Normalise so a client cannot tell the
+# transports apart.
+PATH_NODE_NAMES = {"1": "PLEOS-PATH1", "2": "PLEOS-PATH2"}
 CHANNEL_COUNT = 9
 
 
@@ -88,6 +92,30 @@ def open_serial(port: str, baud: int) -> serial.Serial:
             "dialout group and log back in:\n"
             "  sudo usermod -aG dialout $USER"
         ) from error
+
+
+def normalise_state(state: dict) -> dict:
+    """Rewrite a CBOR state frame into the shape clients already expect."""
+    nodes = state.get("path_nodes")
+    if not isinstance(nodes, dict):
+        return state
+    renamed = {}
+    for key, value in nodes.items():
+        name = PATH_NODE_NAMES.get(str(key), str(key))
+        entry = dict(value) if isinstance(value, dict) else {}
+        entry.setdefault("channel", PATH_NODES.get(name, ""))
+        # The controller reports the applied relay level; the BLE path reports a
+        # health string. Provide both so either client works unchanged.
+        applied = entry.get("applied")
+        if applied == 1:
+            entry["health"] = "ISOLATED"
+        elif applied == 0:
+            entry["health"] = "NORMAL"
+        else:
+            entry["health"] = "UNKNOWN"
+        renamed[name] = entry
+    state["path_nodes"] = renamed
+    return state
 
 
 def wire_command(command: dict) -> str:
@@ -277,7 +305,7 @@ async def main() -> None:
                     expected = int.from_bytes(buffer[4 + size : frame_size], "big")
                     del buffer[:frame_size]
                     if crc16(payload) == expected:
-                        latest.update(cbor2.loads(payload))
+                        latest.update(normalise_state(cbor2.loads(payload)))
                         await broadcast()
             await asyncio.sleep(0.01)
 

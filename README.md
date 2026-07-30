@@ -18,7 +18,7 @@ cd pleos
 | Drive Pilot | repo root | `com.example.mrm_multimodal_demo/.MainActivity` | PLEOS IVI 데모, 지도/주행/차량 상태 표시 |
 | PLEOS Multimode | `apps/pleos_multimode` | `com.example.pleosmrmviewer/.MainActivity` | 3D 차량 기반 Autoware 센서 조합 전환, MRM 시각화 |
 | PLEOS Reconfig | `apps/pleos_reconfig_console` | `com.example.pleosreconfig/.MainActivity` | TSN/Zonal 재구성, 고장 시나리오, CBOR fault injection 검증 |
-| PLEOS Reconfig Studio | `apps/pleos_reconfig_studio` | `com.hwkim3330.pleosreconfigstudio/.MainActivity` | ROII 기반 Inline ESP/TSN 경로 재구성 및 Autoware 멀티모드 검증 |
+| PLEOS Reconfig Studio | `apps/pleos_reconfig_studio` | `com.keti.pleos.reconfig/com.hwkim3330.pleosreconfigstudio.MainActivity` | ROII 기반 ESP/TSN 경로 재구성, 실물 3보드 직결 BLE 검증 |
 | PLEOS Test Bench | `tools/pleos_controller.py` | local web `127.0.0.1:8765` | Mac에서 ADB로 앱 실행, 속도/기어/GPS/CBOR/MRM 시나리오 조작 |
 
 ## 버전 정보
@@ -97,7 +97,11 @@ cd pleos
 - 센서 고장, TSN/FRER/Zonal 고장, 복합 환경 저하, MRM safe stop 시나리오
 - ADB broadcast 기반 CBOR fault payload 주입과 Flutter EventChannel 처리
 - 7인치 ESP 중앙 컨트롤러 및 USB 스위치 I/O 노드 실시간 연동
+- ESP32 3보드 구성: 7인치 감독자 + Path1/Path2 표시 노드, Path3는 7인치 로컬 GPIO6
+- Path 노드 래칭 버튼 2개: 탭 토글 고장 주입, 탭 제어권 반납 + 경로 식별 알림
+- 명시적 조작이 노드 로컬 래치를 항상 무시하므로 감독자가 잠기지 않음
 - `hardware/esp32_reconfig`의 Supervisor, Inline Injector, I/O Node 펌웨어와 fail-safe 배선 계약
+- 전원만 연결된 상태로 동작하며 호스트 의존이 없음
 
 ## 빠른 실행
 
@@ -153,8 +157,8 @@ adb -s emulator-5554 shell am start -n com.example.pleosmrmviewer/.MainActivity
 # PLEOS Reconfig
 adb -s emulator-5554 shell am start -n com.example.pleosreconfig/.MainActivity
 
-# PLEOS Reconfig Studio
-adb -s emulator-5554 shell am start -n com.hwkim3330.pleosreconfigstudio/.MainActivity
+# PLEOS Reconfig Studio (applicationId와 activity 클래스가 다릅니다)
+adb shell am start -n com.keti.pleos.reconfig/com.hwkim3330.pleosreconfigstudio.MainActivity
 ```
 
 ## 빌드와 테스트
@@ -200,16 +204,23 @@ flutter run -d emulator-5554 --debug --no-resident
 
 `PLEOS Reconfig`가 ROII 모델을 사용하는 재구성 과제 앱입니다. 7인치 ESP의 CBOR 브리지를 먼저 실행한 다음 앱을 시작합니다.
 
-```bash
-# ioniq 저장소에서 실행
-./tools/esp_bridge/run.sh --serial /dev/tty.usbmodem59580282341
+확정된 데모 경로는 **실물 태블릿이 7인치 컨트롤러에 직접 BLE로 붙는 것**이며 브리지가 필요 없습니다. `PLEOS Reconfig Studio`는 `directBle: true`로 동작합니다.
 
-# 이 저장소에서 실행
-cd apps/pleos_reconfig_console
-flutter run -d emulator-5554 --debug --no-resident
+```bash
+cd apps/pleos_reconfig_studio
+flutter build apk --debug
+adb install -r build/app/outputs/flutter-apk/app-debug.apk
 ```
 
-앱은 에뮬레이터에서 `ws://10.0.2.2:8766`으로 Mac 브리지에 접속합니다. 상단 `Controller`는 7인치 중앙 ESP, `Switch I/O`는 중앙 보드의 USB에 연결된 보조 ESP 상태를 뜻합니다. 보조 노드가 없으면 `Simulation`으로 표시되며 터치/앱 시나리오는 계속 사용할 수 있습니다.
+브리지는 관측/유지보수 용도입니다. 블루투스가 없는 Linux 호스트에서는 USB framed-CBOR 시리얼만 사용할 수 있습니다.
+
+```bash
+./hardware/esp32_reconfig/bridge/run.sh --transport serial --serial /dev/ttyUSB0
+```
+
+`ws://10.0.2.2:8766`은 안드로이드 에뮬레이터 전용 별칭이므로 실물 태블릿에서는 닿지 않습니다. 상단 `Controller`는 7인치 중앙 ESP, `Switch I/O`는 중앙 보드 USB의 보조 ESP, `Path nodes`는 Path1/Path2 노드와 로컬 GPIO6로 구동되는 Path3 상태입니다.
+
+자세한 내용은 [ESP32 재구성 하드웨어 README](hardware/esp32_reconfig/README.md)를 참고합니다.
 
 ## CBOR Fault Injection
 
@@ -563,7 +574,11 @@ adb -s emulator-5554 reboot
 
 - [PLEOS Multimode README](apps/pleos_multimode/README.md)
 - [PLEOS Reconfig README](apps/pleos_reconfig_console/README.md)
+- [PLEOS Reconfig Studio README](apps/pleos_reconfig_studio/README.md)
+- [ESP32 재구성 하드웨어](hardware/esp32_reconfig/README.md)
+- [고장 주입 모듈 배선](hardware/esp32_reconfig/FAULT_INJECTION_WIRING.md)
 - [Reconfig app plan](docs/pleos_reconfig_app_plan.md)
+- [BLE 전자잉크 ESL 계획](docs/esl_eink_plan.md)
 - [Multimode CBOR testing](apps/pleos_multimode/cbor_testing.md)
 - [Reconfig CBOR testing](apps/pleos_reconfig_console/cbor_testing.md)
 
