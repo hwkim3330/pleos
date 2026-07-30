@@ -31,6 +31,8 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
+# Flutter/Gradle build output stays ignored: apps/*/build is ~2.4 GB and holds a
+# 152 MB APK, past GitHub's 100 MB per-file hard limit.
 /build/
 /coverage/
 
