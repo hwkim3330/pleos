@@ -41,14 +41,19 @@ class HardwareReconfigService {
   StreamSubscription<List<int>>? _valueSubscription;
   Timer? _retry;
   Timer? _bleRetry;
-  Timer? _pathScanTimer;
   bool _disposed = false;
   bool _bleConnecting = false;
   bool _gattConnecting = false;
   final Map<String, String> _bleChannels = {};
   String _bleMode = 'UNKNOWN';
   int _bleSequence = 0;
+  DateTime? _lastSyncRequestAt;
   bool _bleIoNodeConnected = false;
+
+  // Path node liveness is reported by the 7-inch controller over !PATHNODE:.
+  // It must never be inferred from advertising: once the controller connects to
+  // a path node as a BLE client, that node stops advertising, so scanning would
+  // report the healthy, actively-controlled case as offline.
   final Map<String, bool> _blePathNodes = {
     'PLEOS-PATH1': false,
     'PLEOS-PATH2': false,
@@ -64,7 +69,10 @@ class HardwareReconfigService {
   Stream<HardwareReconfigState> get states => _states.stream;
 
   void connect() {
-    _open();
+    // A real tablet has no bridge to reach: ws://10.0.2.2 is an emulator-only
+    // alias, so opening it would retry forever and a later drop would push a
+    // blank OFFLINE state over the live BLE state.
+    if (!directBle) _open();
     if (directBle) _startBleScan();
   }
 
@@ -126,8 +134,7 @@ class HardwareReconfigService {
       await _valueSubscription?.cancel();
       _valueSubscription = control.lastValueStream.listen(_onBleValue);
       await control.setNotifyValue(true);
-      await control.write(utf8.encode('!SYNC'), withoutResponse: false);
-      unawaited(_scanPathNodes());
+      await _requestSync();
     } catch (_) {
       await device.disconnect();
       _bleDisconnected();
@@ -142,7 +149,17 @@ class HardwareReconfigService {
     if (line.startsWith('!STATE:')) {
       final fields = line.split(':');
       if (fields.length >= 4) {
-        _bleSequence = int.tryParse(fields[1]) ?? _bleSequence;
+        final sequence = int.tryParse(fields[1]) ?? _bleSequence;
+        // The controller bumps seq once per sendState() and notifies one !STATE:
+        // per bump, so a jump means a notify was dropped and the 9 !CHANNEL:
+        // lines of that snapshot may be gone with it. A decrease means it
+        // rebooted. Either way the cached channel map can no longer be trusted.
+        if (_bleSequence != 0 &&
+            (sequence < _bleSequence || sequence > _bleSequence + 1)) {
+          // A failed resync write is not fatal here: the next gap retries it.
+          _requestSync().ignore();
+        }
+        _bleSequence = sequence;
         _bleMode = fields[2];
         _bleIoNodeConnected = fields[3] == 'ONLINE';
         emit = _bleChannels.length >= 9;
@@ -172,54 +189,29 @@ class HardwareReconfigService {
     );
   }
 
-  Future<void> _scanPathNodes() async {
-    if (_disposed || _bleControl == null) return;
-    final seen = <String>{};
-    StreamSubscription<List<ScanResult>>? subscription;
-    try {
-      subscription = FlutterBluePlus.scanResults.listen((results) {
-        for (final result in results) {
-          final name = result.advertisementData.advName;
-          if (_blePathNodes.containsKey(name)) seen.add(name);
-        }
-      });
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
-      await Future<void>.delayed(const Duration(seconds: 4));
-      for (final name in _blePathNodes.keys) {
-        _blePathNodes[name] = seen.contains(name);
-      }
-      _emitBleState('Path node scan complete');
-    } catch (_) {
-      // Keep the controller GATT link authoritative if a background scan fails.
-    } finally {
-      await subscription?.cancel();
-      _pathScanTimer?.cancel();
-      if (!_disposed && _bleControl != null) {
-        _pathScanTimer = Timer(const Duration(seconds: 10), _scanPathNodes);
-      }
+  /// Asks the controller for a complete snapshot, rate limited so a burst of
+  /// dropped notifications cannot turn into a !SYNC storm. Throws if the write
+  /// fails so the caller on the connect path can treat it as a failed link.
+  Future<void> _requestSync() async {
+    final control = _bleControl;
+    if (_disposed || control == null) return;
+    final now = DateTime.now();
+    final last = _lastSyncRequestAt;
+    if (last != null && now.difference(last) < const Duration(seconds: 3)) {
+      return;
     }
-  }
-
-  void _emitBleState(String event) {
-    if (_disposed || _bleControl == null) return;
-    _states.add(
-      HardwareReconfigState(
-        connected: true,
-        mode: _bleMode,
-        event: event,
-        channels: Map.unmodifiable(_bleChannels),
-        sequence: _bleSequence,
-        ioNodeConnected: _bleIoNodeConnected,
-        pathNodes: Map.unmodifiable(_blePathNodes),
-      ),
-    );
+    _lastSyncRequestAt = now;
+    await control.write(utf8.encode('!SYNC'), withoutResponse: false);
   }
 
   void _bleDisconnected() {
     _bleControl = null;
     _bleDevice = null;
     _gattConnecting = false;
-    _pathScanTimer?.cancel();
+    // Forget the sequence so the first !STATE: after reconnecting is not read
+    // as a gap; _connectBle already issues its own !SYNC.
+    _bleSequence = 0;
+    _lastSyncRequestAt = null;
     for (final name in _blePathNodes.keys) {
       _blePathNodes[name] = false;
     }
@@ -308,10 +300,10 @@ class HardwareReconfigService {
 
   void _disconnected() {
     _socket = null;
-    if (!_disposed) {
-      _states.add(const HardwareReconfigState());
-      _scheduleRetry();
-    }
+    if (_disposed) return;
+    // Never let a bridge drop overwrite a live BLE link with a blank state.
+    if (_bleControl == null) _states.add(const HardwareReconfigState());
+    if (!directBle) _scheduleRetry();
   }
 
   void _scheduleRetry() {
@@ -323,7 +315,6 @@ class HardwareReconfigService {
     _disposed = true;
     _retry?.cancel();
     _bleRetry?.cancel();
-    _pathScanTimer?.cancel();
     if (directBle) await FlutterBluePlus.stopScan();
     await _scanSubscription?.cancel();
     await _connectionSubscription?.cancel();

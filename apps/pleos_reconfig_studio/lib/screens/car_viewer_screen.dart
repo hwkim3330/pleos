@@ -268,10 +268,14 @@ class _TopBar extends StatelessWidget {
             const SizedBox(width: 8),
             _StatusPill(
               label: 'Path nodes',
+              // Path 3 is the 7-inch board's own GPIO6, so it has no node ACK.
+              // Report it as LOCAL rather than leaving it out, otherwise three
+              // paths appear to be covered by two reports.
               value: hardware.connected && hardware.pathNodes.isEmpty
-                  ? 'P1/P2 via 7-inch'
-                  : 'via 7-inch · P1 ${hardware.pathNodes['PLEOS-PATH1'] == true ? 'ACK' : '--'}  ·  '
-                        'P2 ${hardware.pathNodes['PLEOS-PATH2'] == true ? 'ACK' : '--'}',
+                  ? 'P1/P2 via 7-inch · P3 LOCAL'
+                  : 'P1 ${hardware.pathNodes['PLEOS-PATH1'] == true ? 'ACK' : '--'}  ·  '
+                        'P2 ${hardware.pathNodes['PLEOS-PATH2'] == true ? 'ACK' : '--'}  ·  '
+                        'P3 LOCAL ${(hardware.channels['tsn_rear'] ?? 'NORMAL') == 'NORMAL' ? 'OK' : 'FAULT'}',
               color: hardware.connected && hardware.pathNodes.isEmpty
                   ? const Color(0xFF0F766E)
                   : hardware.pathNodes.values

@@ -33,17 +33,76 @@ Use USB CBOR only for maintenance:
   --transport serial --serial /dev/cu.usbmodem59580282341
 ```
 
+### Confirmed demo path
+
+The confirmed configuration is **three ESP32 boards** — the 7-inch supervisor
+plus the Path1 and Path2 display nodes — driven by a physical Android tablet
+that connects **straight to the 7-inch controller over BLE, with no bridge
+running**. `pleos_reconfig_studio` ships with `directBle: true`, so the tablet
+owns the GATT link itself. The bridge below is for observation and maintenance,
+not for the demo.
+
+Path 3 (`tsn_rear`) has no display node in this configuration: the 7-inch board
+drives that relay from its own `GPIO6`, which is why its card is labelled
+`LOCAL`. The `PLEOS_PATH_INDEX=2` (`PATH3`) build of `path_display_node` is kept
+as a future option and is currently unused.
+
+### Linux host
+
+A Linux host without a Bluetooth adapter cannot run `--transport ble` at all.
+The USB framed-CBOR serial transport is the only option there, and it is
+bidirectional — state comes back as CBOR and commands are written to the same
+UART:
+
+```bash
+./hardware/esp32_reconfig/bridge/run.sh --transport serial --serial /dev/ttyUSB0
+```
+
+`find_port` matches `/dev/ttyACM*` and `/dev/ttyUSB*` as well as the macOS
+`usbmodem`/`usbserial` names, prefers the Espressif/CH34x/CP210x/FTDI vendor
+IDs, and prints the port it picked with its `VID:PID`. **If more than one
+candidate is present it refuses to guess and asks for `--serial`** — on the KETI
+Linux box the LAN9662 VelocityDRIVE board also owns a `/dev/ttyACM*`, and
+opening that instead would point a CBOR reader at a MUP1 device.
+
+If opening the port fails with a permission error, add yourself to the
+`dialout` group and log back in:
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+Note that `ws://10.0.2.2:8766` is an Android emulator alias for the host. A
+physical tablet cannot reach it, and needs the host's LAN address instead — but
+for the confirmed demo path above the tablet does not use the bridge at all.
+
 | GATT item | UUID |
 | --- | --- |
 | Service | `7d2f0001-7c7a-4f7b-9b51-0af9a281d110` |
 | Notify/write control | `7d2f0002-7c7a-4f7b-9b51-0af9a281d110` |
 
-Commands are UTF-8 `!SYNC`, `!RECOVER`, `!SCENARIO:n`, or `!CHANNEL:id:health`. The app sends `!SYNC` after subscribing so a reconnect always receives a complete snapshot. Notifications are short `!STATE`, `!CHANNEL`, and `!EVENT` records so they remain below the negotiated BLE MTU.
+Commands are UTF-8 `!SYNC`, `!RECOVER`, `!SCENARIO:n`, `!PATH:n`, or
+`!CHANNEL:id:health`. The app sends `!SYNC` after subscribing so a reconnect
+always receives a complete snapshot, and re-sends it whenever the `!STATE:`
+sequence jumps or rewinds, so a dropped notification cannot leave the tablet
+holding a stale channel map. Notifications are short `!STATE`, `!CHANNEL`,
+`!PATHNODE` and `!EVENT` records so they remain below the negotiated BLE MTU.
 
-The inline boards always boot into normally-closed bypass. Path commands are
-refreshed every 250 ms; loss of controller communication triggers local
-recovery after 1.2 seconds. Fault state is deliberately not restored from
-flash after reboot.
+Path node liveness reaches the app only through the controller's `!PATHNODE:`
+record. It must not be inferred from BLE advertising: a path node stops
+advertising once the controller connects to it, so a scan reports the healthy,
+actively-controlled case as offline.
+
+The inline boards always boot into normally-closed bypass. Fault state is
+deliberately not restored from flash after reboot.
+
+In the BLE path transport used by the current demo, the controller writes a
+path command only when the node's reported level differs from the intended one,
+rate limited to one write per 250 ms, and the node answers `!APPLIED:` with its
+real relay level. The fail-safe on this transport is the BLE link itself:
+`onDisconnect` returns `GPIO27` to LOW immediately. The 10-second
+`kCommandWatchdogMs` timeout is a property of the ESP-NOW transport
+(`kUseBleController = false`) and is not what protects the BLE path.
 
 The ESP32 must never be wired directly into an automotive Ethernet differential pair. The inline injector controls a purpose-built isolated relay or Ethernet-switch test PCB. Loss of power, watchdog timeout, USB disconnect and firmware reset must all return the PCB to its normally-closed pass-through state.
 
@@ -75,13 +134,16 @@ CRC-protected acknowledgement once per second with its role and applied relay
 state. The controller shows `P1 ACK` or `P2 ACK` only while that acknowledgement
 is fresh; BLE advertising alone is not treated as proof of control. Path nodes accept either BLE
 or ESP-NOW; the newest valid command wins. If neither path refreshes within
-1.2 seconds, GPIO27 returns LOW and restores NC pass-through.
+`kCommandWatchdogMs` (10 seconds), GPIO27 returns LOW and restores NC
+pass-through. This watchdog applies to the ESP-NOW transport only.
 
 ESP-NOW is a direct safety/demo fallback, not the application data plane. BLE
-continues to carry app state and events through the Mac bridge. Local button
-commands temporarily take priority for 1.2 seconds, after which network state
-resumes. Path firmware uses the `huge_app` partition because concurrent BLE,
-Wi-Fi/ESP-NOW, and display libraries exceed the default 1.3 MB app partition.
+continues to carry app state and events through the Mac bridge. A local button
+latch is not time limited: it holds until the lower button releases it or the
+controller link drops, and the controller stops commanding a latched node
+instead of fighting it. Path firmware uses the `huge_app` partition because
+concurrent BLE, Wi-Fi/ESP-NOW, and display libraries exceed the default 1.3 MB
+app partition.
 
 ## 1.14-inch Path displays
 
@@ -95,15 +157,35 @@ The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first bo
   /dev/cu.usbserial-XXXXXXXX PATH2
 ```
 
-Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass, show `WAITING` until their first controller command, and return to `NORMAL` if command refresh stops for 1.2 seconds. A circular heartbeat shows command age and uses the current state color without full-screen redraw. `SOURCE` identifies `BLE`, `NOW`, `LOCAL`, or fail-safe `SAFE` control.
+Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC bypass and show `WAITING` until their first controller command. A circular heartbeat shows command age and uses the current state color without full-screen redraw. `SOURCE` identifies `BLE`, `LATCH` (local button holds the node), `LOCAL` (local release), `NOW`, or fail-safe `SAFE` control.
 
-Both user controls are on the display's left edge. Hold the upper fault button
-(`GPIO0`) for 600 ms and keep holding to maintain injection; releasing it
-restores normal. The lower safe button (`GPIO35`)
-recovers immediately. The
-separate reset control remains reset. BLE callbacks only queue state changes;
-all relay and LCD updates run in the main loop so button input cannot race the
-display renderer.
+Both user controls are on the display's left edge and are **latching taps**; no
+hold is required.
+
+| Button | Action |
+| --- | --- |
+| Upper (`GPIO0`) | Tap to toggle the relay and take local ownership of the node |
+| Lower (`GPIO35`) | Tap to return to pass-through and release ownership to the network |
+
+A latched node reports `!LOCAL:<owned>:<level>` to the 7-inch controller, which
+adopts that level into its channel state. The 7-inch card, the Autoware mode and
+the tablet therefore follow the real relay instead of disagreeing with it, and
+the 7-inch link line shows `LCL` for a locally owned path. While a node is
+latched the controller stops commanding it, and the node still answers
+`!APPLIED:` with its true level so the controller never spins reissuing a
+refused command. Tapping the lower button hands control straight back — the next
+controller command applies without waiting for a timer.
+
+Fail-safe outranks the latch: losing the BLE link to the controller clears local
+ownership and returns `GPIO27` to LOW.
+
+The separate reset control remains reset. BLE callbacks only queue state
+changes; all relay and LCD updates run in the main loop so button input cannot
+race the display renderer.
+
+> `GPIO35` is input-only and has no internal pull-up on the ESP32, so it relies
+> on the T-Display's external pull-up. If the safe button ever appears to fire
+> on its own, measure that pull-up before suspecting the firmware.
 
 Each Path node drives its Fault Injection Module from `GPIO27` to
 `J3.3 / RELAY_EN`: LOW is normal NC pass-through and HIGH is an injected

@@ -29,17 +29,65 @@ def crc16(data: bytes) -> int:
     return crc
 
 
+# USB vendors that an ESP32 board can appear as: Espressif native USB-CDC, and
+# the CH34x / CP210x / FTDI UART bridges used on the various dev boards.
+ESP_VENDOR_IDS = {0x303A, 0x1A86, 0x10C4, 0x0403}
+
+
+def describe_port(port) -> str:
+    vid = f"{port.vid:04X}" if port.vid is not None else "????"
+    pid = f"{port.pid:04X}" if port.pid is not None else "????"
+    return f"{port.device}  {vid}:{pid}  {port.product or port.description}"
+
+
 def find_port(requested: str | None) -> str:
     if requested:
         return requested
-    candidates = [
-        port.device
+
+    # Matches macOS (/dev/cu.usbmodem*, /dev/cu.usbserial*) and Linux
+    # (/dev/ttyACM*, /dev/ttyUSB*) naming.
+    named = [
+        port
         for port in list_ports.comports()
-        if "usbmodem" in port.device or "wch" in port.description.lower()
+        if "usbmodem" in port.device
+        or "usbserial" in port.device
+        or "ttyACM" in port.device
+        or "ttyUSB" in port.device
     ]
+    candidates = [port for port in named if port.vid in ESP_VENDOR_IDS] or named
+
     if not candidates:
-        raise RuntimeError("ESP serial port not found. Pass --serial /dev/cu.usbmodem...")
-    return candidates[0]
+        raise RuntimeError(
+            "No USB serial port found. Pass --serial explicitly, e.g.\n"
+            "  --serial /dev/ttyUSB0                  (Linux)\n"
+            "  --serial /dev/cu.usbmodem59580282341   (macOS)"
+        )
+
+    if len(candidates) > 1:
+        listing = "\n".join(f"  {describe_port(port)}" for port in candidates)
+        # Refusing beats guessing: on the KETI Linux box the LAN9662
+        # VelocityDRIVE board also owns a /dev/ttyACM*, and opening it as if it
+        # were the 7-inch controller would talk MUP1 at a CBOR reader.
+        raise RuntimeError(
+            f"{len(candidates)} USB serial ports found; refusing to guess.\n"
+            f"{listing}\n"
+            "Pick one with --serial <device>."
+        )
+
+    print(f"[serial] auto-selected {describe_port(candidates[0])}")
+    return candidates[0].device
+
+
+def open_serial(port: str, baud: int) -> serial.Serial:
+    try:
+        return serial.Serial(port, baud, timeout=0.05)
+    except serial.SerialException as error:
+        raise RuntimeError(
+            f"Cannot open {port}: {error}\n"
+            "On Linux this is usually group permissions. Add yourself to the "
+            "dialout group and log back in:\n"
+            "  sudo usermod -aG dialout $USER"
+        ) from error
 
 
 def wire_command(command: dict) -> str:
@@ -47,6 +95,10 @@ def wire_command(command: dict) -> str:
         return f"!SCENARIO:{command['id']}"
     if command.get("command") == "channel":
         return f"!CHANNEL:{command['id']}:{command['health']}"
+    # The app's setExclusivePathFault() sends this; without it the bridge
+    # rejected the command that the direct-BLE path accepts as !PATH:n.
+    if command.get("command") == "path":
+        return f"!PATH:{command['id']}"
     if command.get("command") == "recover":
         return "!RECOVER"
     raise ValueError("unknown_command")
@@ -202,7 +254,7 @@ async def main() -> None:
 
     async def run_serial() -> None:
         port = find_port(args.serial)
-        stream = serial.Serial(port, args.baud, timeout=0.05)
+        stream = open_serial(port, args.baud)
         buffer = bytearray()
         print(f"[serial] connected: {port}")
         while True:

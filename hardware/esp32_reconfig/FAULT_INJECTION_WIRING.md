@@ -78,9 +78,14 @@ pair. The ESP32 connects only to the isolated module control header.
    `RELAY_EN` at LOW and verify green on, red off, and Pair A continuity.
 3. Connect ESP32 GND and GPIO27. Issue an isolate command and verify 3.3 V at
    J3.3, relay operation, red on, green off, and Pair A open circuit.
-4. Stop the controller or BLE bridge. Within 1.2 seconds the firmware must
-   return GPIO27 LOW and restore continuity.
-5. Reset and power-cycle each ESP32. The module must remain in or return to
+4. Power off the 7-inch controller. On the BLE transport the node's
+   `onDisconnect` must return GPIO27 LOW and restore continuity as soon as the
+   link drops; on the ESP-NOW transport the 10-second `kCommandWatchdogMs`
+   timeout does it. Verify continuity is restored in both cases.
+5. Latch a fault with the node's upper button, then power off the controller.
+   The latch must not survive: local ownership is cleared and GPIO27 returns
+   LOW.
+6. Reset and power-cycle each ESP32. The module must remain in or return to
    NC pass-through before testing on an isolated Ethernet bench network.
 
 ## Commands
@@ -100,4 +105,11 @@ normal pass-through.
 
 The 7-inch controller also broadcasts the two front-path states over ESP-NOW
 on Wi-Fi channel 6 every 250 ms. BLE and ESP-NOW share the same active-high
-relay contract; neither transport can bypass the local 1.2-second watchdog.
+relay contract, and neither can bypass the local fail-safe: a BLE disconnect
+returns GPIO27 LOW immediately, and the ESP-NOW transport falls back after the
+10-second `kCommandWatchdogMs` timeout.
+
+A node latched by its own upper button refuses network commands until the lower
+button releases it, but still answers `!APPLIED:` with the real relay level and
+reports `!LOCAL:1:<level>` so the controller adopts what the hardware is
+actually doing rather than disagreeing with it.

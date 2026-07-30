@@ -31,8 +31,6 @@ constexpr uint32_t kHeartbeatMs = 1000;
 constexpr uint32_t kAckPeriodMs = 600 + (PLEOS_PATH_INDEX * 250);
 constexpr uint32_t kUiRefreshMs = 200;
 constexpr uint32_t kButtonDebounceMs = 40;
-constexpr uint32_t kInjectHoldMs = 600;
-constexpr uint32_t kManualOverrideMs = 1200;
 constexpr bool kUseBleController = true;
 constexpr uint8_t kEspNowChannel = 6;
 constexpr uint32_t kEspNowMagic = 0x504C454F;
@@ -59,9 +57,11 @@ bool injectButtonHigh = true;
 bool recoverButtonHigh = true;
 uint32_t injectButtonChangedAt = 0;
 uint32_t recoverButtonChangedAt = 0;
-uint32_t manualOverrideUntil = 0;
-uint32_t injectPressedAt = 0;
-bool localInjectActive = false;
+// The upper button latches: one tap toggles the relay and gives the local
+// operator ownership of this node until the lower button releases it. Holding
+// is no longer required, and the latch is reported upstream so the 7-inch
+// controller and the tablet follow the relay instead of diverging from it.
+bool localLatched = false;
 uint32_t lastNowSequence = 0;
 uint32_t lastNowReceiveAt = 0;
 volatile bool espNowPending = false;
@@ -113,12 +113,20 @@ void notifyBle(const String &message) {
   delay(4);
 }
 
+// Tells the controller who owns this node and what the relay actually is, so a
+// locally latched fault is adopted upstream instead of being invisible there.
+void notifyLocalOwnership() {
+  notifyBle(String("!LOCAL:") + (localLatched ? "1" : "0") + ":" +
+            (isolated ? "ISOLATED" : "NORMAL"));
+}
+
 void sendBleSnapshot(const char *event) {
   if (!bleConnected) return;
   notifyBle(String("!PATH:") + kPathNames[PLEOS_PATH_INDEX] + ":" + sequence + ":" +
             (controllerOnline ? "ONLINE" : "WAITING"));
   notifyBle(String("!CHANNEL:") + kChannelIds[PLEOS_PATH_INDEX] + ":" +
             (isolated ? "ISOLATED" : "NORMAL"));
+  notifyLocalOwnership();
   notifyBle(String("!EVENT:") + event);
 }
 
@@ -171,8 +179,9 @@ void drawLiveMetrics() {
   printCentered(footer, 145, 112, 1, 0x9CF3);
 
   display.fillRect(0, 20, 3, 42,
-                   localInjectActive ? ST77XX_RED : !injectButtonHigh ? ST77XX_ORANGE : 0x4208);
-  display.fillRect(0, 75, 3, 42, isolated ? 0x4208 : ST77XX_GREEN);
+                   localLatched && isolated ? ST77XX_RED
+                                            : localLatched ? ST77XX_ORANGE : 0x4208);
+  display.fillRect(0, 75, 3, 42, localLatched ? ST77XX_GREEN : 0x4208);
 }
 
 void drawShell() {
@@ -191,14 +200,14 @@ void drawShell() {
   display.drawFastHLine(6, 68, 35, 0x2104);
   display.setTextColor(0x9CF3);
   display.setCursor(8, 31);
-  display.print("HOLD");
+  display.print("TAP");
   display.setCursor(8, 43);
-  display.print("FAULT");
+  display.print("TOGGLE");
   display.setTextColor(0x7BEF);
   display.setCursor(8, 86);
-  display.print("PRESS");
+  display.print("TAP");
   display.setCursor(8, 98);
-  display.print("SAFE");
+  display.print("RELEASE");
   drawLiveMetrics();
 }
 
@@ -222,6 +231,9 @@ void recoverSafe() {
   isolated = false;
   controllerOnline = false;
   commandSource = "SAFE";
+  // Fail-safe outranks the local latch: losing the controller must return the
+  // pair to NC pass-through and hand ownership back.
+  localLatched = false;
   digitalWrite(kRelayEnable, LOW);
   ringRedrawPending = true;
   drawLiveMetrics();
@@ -361,47 +373,39 @@ void readCommands() {
 
 void pollButtons() {
   const uint32_t now = millis();
+
+  // Upper button (GPIO0): tap to toggle the relay and take local ownership.
   const bool injectHigh = digitalRead(kInjectButton) != LOW;
   if (injectHigh != injectButtonHigh && now - injectButtonChangedAt >= kButtonDebounceMs) {
     injectButtonHigh = injectHigh;
     injectButtonChangedAt = now;
     if (!injectHigh) {
-      injectPressedAt = now;
-    } else {
-      if (localInjectActive) {
-        localInjectActive = false;
-        manualOverrideUntil = now + kManualOverrideMs;
-        lastCommandAt = now;
-        commandSource = "LOCAL";
-        setIsolated(false);
-        sendBleSnapshot("manual_release");
-      }
+      const bool target = !isolated;
+      localLatched = true;
+      lastCommandAt = now;
+      commandSource = "LATCH";
+      setIsolated(target);
+      sendBleSnapshot(target ? "local_fault" : "local_normal");
     }
   }
-  if (!injectButtonHigh && !localInjectActive && now - injectPressedAt >= kInjectHoldMs) {
-    localInjectActive = true;
-    commandSource = "LOCAL";
-    setIsolated(true);
-    sendBleSnapshot("manual_hold");
-  }
-  if (localInjectActive) {
-    manualOverrideUntil = now + kManualOverrideMs;
-    lastCommandAt = now;
-  }
 
+  // Lower button (GPIO35): tap to release ownership back to the network. The
+  // pair returns to pass-through immediately; the next controller command is
+  // applied without waiting for a timer to expire.
   const bool recoverHigh = digitalRead(kRecoverButton) != LOW;
   if (recoverHigh != recoverButtonHigh && now - recoverButtonChangedAt >= kButtonDebounceMs) {
     recoverButtonHigh = recoverHigh;
     recoverButtonChangedAt = now;
     if (!recoverHigh) {
-      localInjectActive = false;
-      manualOverrideUntil = now + kManualOverrideMs;
+      localLatched = false;
       lastCommandAt = now;
       commandSource = "LOCAL";
       setIsolated(false);
-      sendBleSnapshot("manual_recover");
+      sendBleSnapshot("local_release");
     }
   }
+
+  if (localLatched) lastCommandAt = now;
 }
 
 }  // namespace
@@ -434,19 +438,27 @@ void loop() {
   }
   const int8_t bleCommand = pendingBleCommand;
   if (bleCommand >= 0) {
+    // Latch the id before acting: a second !SET: landing in the BLE callback
+    // would otherwise make us echo an id the controller no longer recognises.
+    const uint32_t commandId = pendingBleCommandId;
     pendingBleCommand = -1;
     if (bleCommand == 2) {
       sendBleSnapshot("sync");
-    } else if (static_cast<int32_t>(millis() - manualOverrideUntil) >= 0) {
-      lastCommandAt = millis();
-      commandSource = "BLE";
-      setIsolated(bleCommand == 1);
-      notifyBle(String("!APPLIED:") + pendingBleCommandId + ":" +
-                (isolated ? "HIGH" : "LOW"));
+    } else {
+      if (!localLatched) {
+        lastCommandAt = millis();
+        commandSource = "BLE";
+        setIsolated(bleCommand == 1);
+      } else {
+        // The local operator owns the node. Refuse the command but still report
+        // the real relay level, otherwise the controller never learns what this
+        // node is doing and reissues the same command every 250 ms.
+        notifyLocalOwnership();
+      }
+      notifyBle(String("!APPLIED:") + commandId + ":" + (isolated ? "HIGH" : "LOW"));
     }
   }
-  if (!kUseBleController && espNowPending &&
-      static_cast<int32_t>(millis() - manualOverrideUntil) >= 0) {
+  if (!kUseBleController && espNowPending && !localLatched) {
     espNowPending = false;
     lastCommandAt = millis();
     commandSource = "NOW";

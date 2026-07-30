@@ -97,6 +97,12 @@ volatile bool pathBleConnected[2] = {false, false};
 volatile uint8_t pathBleApplied[2] = {0xFF, 0xFF};
 uint32_t pathBleCommandId[2] = {0, 0};
 uint32_t pathBleCommandAt[2] = {0, 0};
+// Set from the BLE notify task when a path node reports its own relay level.
+// loop() adopts it under the LVGL lock. pathLocalReport is -1 when that node
+// has nothing new to report, otherwise 0 for NORMAL and 1 for ISOLATED.
+volatile bool pathLocalPending = false;
+volatile bool pathLocalOwned[2] = {false, false};
+volatile int8_t pathLocalReport[2] = {-1, -1};
 
 bool isPathOnline(size_t index, uint32_t now = millis()) {
   if (kUseBlePathTransport) {
@@ -249,6 +255,9 @@ void sendEspNowState() {
     const uint32_t now = millis();
     for (size_t index = 0; index < 2; ++index) {
       if (!pathBleConnected[index] || pathBleControls[index] == nullptr) continue;
+      // Do not fight a node whose own buttons own it; it would refuse anyway
+      // and we would reissue the same command every 250 ms.
+      if (pathLocalOwned[index]) continue;
       const uint8_t desired = channels[index].health == Health::healthy ? 0 : 1;
       if (pathBleApplied[index] == desired || now - pathBleCommandAt[index] < 250) continue;
       const uint32_t commandId = ++pathBleCommandId[index];
@@ -386,8 +395,8 @@ void refreshUi() {
   const bool path2Online = isPathOnline(1, now);
   lv_label_set_text_fmt(linkLabel, "TABLET %s | P1 %s | P2 %s",
                         bleConnected ? "ON" : "WAIT",
-                        path1Online ? "ACK" : "--",
-                        path2Online ? "ACK" : "--");
+                        pathLocalOwned[0] ? "LCL" : (path1Online ? "ACK" : "--"),
+                        pathLocalOwned[1] ? "LCL" : (path2Online ? "ACK" : "--"));
   const uint32_t linkColor = path1Online && path2Online ? 0x66D6B1 :
                              (path1Online || path2Online ? 0xF0A83B : 0x687178);
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(linkColor), 0);
@@ -646,11 +655,28 @@ void onPathBleNotify(BLERemoteCharacteristic *characteristic, uint8_t *data,
   String message;
   message.reserve(length);
   for (size_t i = 0; i < length; ++i) message += static_cast<char>(data[i]);
+
+  // A node latched by its own buttons reports ownership and the real relay
+  // level. Adopt it so the 7-inch cards, the Autoware mode and the tablet
+  // follow the hardware instead of silently disagreeing with it.
+  if (message.startsWith("!LOCAL:")) {
+    const int separator = message.indexOf(':', 7);
+    if (separator < 0) return;
+    const bool isolatedNow = message.substring(separator + 1) != "NORMAL";
+    pathLocalOwned[index] = message.substring(7, separator) == "1";
+    pathLocalReport[index] = isolatedNow ? 1 : 0;
+    pathBleApplied[index] = isolatedNow ? 1 : 0;
+    pathAckAt[index] = millis();
+    pathLocalPending = true;
+    return;
+  }
+
   if (!message.startsWith("!APPLIED:")) return;
   const int separator = message.indexOf(':', 9);
   if (separator < 0) return;
-  const uint32_t commandId = message.substring(9, separator).toInt();
-  if (commandId != pathBleCommandId[index]) return;
+  // The reported level is the truth regardless of which command it answers.
+  // Rejecting a stale id used to leave pathBleApplied at 0xFF, which made
+  // isPathOnline() read a perfectly live path as offline.
   pathBleApplied[index] = message.substring(separator + 1) == "HIGH" ? 1 : 0;
   pathAckAt[index] = millis();
   pathAckPending = true;
@@ -666,6 +692,10 @@ class PathBleClientCallbacks final : public BLEClientCallbacks {
     pathBleConnected[index_] = false;
     pathBleControls[index_] = nullptr;
     pathBleApplied[index_] = 0xFF;
+    // A node we can no longer see cannot hold local ownership, otherwise it
+    // would keep blocking network commands after it is gone.
+    pathLocalOwned[index_] = false;
+    pathLocalReport[index_] = -1;
     pathAckPending = true;
   }
 
@@ -1101,6 +1131,43 @@ void loop() {
     refreshUi();
     lvgl_port_unlock();
     publishBleState("path_ack", true);
+  }
+  if (pathLocalPending) {
+    pathLocalPending = false;
+    int reportedIndex = -1;
+    bool owned = false;
+    for (size_t index = 0; index < 2; ++index) {
+      const int8_t report = pathLocalReport[index];
+      if (report < 0) continue;
+      pathLocalReport[index] = -1;
+      reportedIndex = static_cast<int>(index);
+      owned = pathLocalOwned[index];
+      // Mirror the reported level even on release, otherwise the stale adopted
+      // fault would be recommanded within 250 ms and undo the safe button.
+      channels[index].health = report == 1 ? Health::failed : Health::healthy;
+    }
+    if (reportedIndex >= 0) {
+      lastEvent = owned ? "Path node local button" : "Path node released to network";
+      lvgl_port_lock(-1);
+      refreshUi();
+      lvgl_port_unlock();
+      sendState("path_local", channels[reportedIndex].id);
+    }
+  }
+  // A locally owned node refuses network commands. If a 7-inch card or the
+  // tablet just tried to move it, snap the channel back to the real relay level
+  // so no surface claims a fault the hardware is not holding.
+  for (size_t index = 0; index < 2; ++index) {
+    if (!pathLocalOwned[index] || pathBleApplied[index] == 0xFF) continue;
+    const Health actual =
+        pathBleApplied[index] == 1 ? Health::failed : Health::healthy;
+    if (channels[index].health == actual) continue;
+    channels[index].health = actual;
+    lastEvent = "Path node holds local control";
+    lvgl_port_lock(-1);
+    refreshUi();
+    lvgl_port_unlock();
+    sendState("path_local_hold", channels[index].id);
   }
   if (ioNodeConnected != lastRenderedIoNodeConnected) {
     lastRenderedIoNodeConnected = ioNodeConnected;
