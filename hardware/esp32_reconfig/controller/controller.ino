@@ -109,6 +109,7 @@ volatile int8_t pathLocalLevel[2] = {-1, -1};
 volatile bool pathAlertPending = false;
 volatile int8_t pathAlertIndex = -1;
 volatile long pathAlertSeqSeen[2] = {-1, -1};
+volatile bool pathReleasePending = false;
 constexpr uint32_t kPathReadPeriodMs = 250;
 // Nodes are polled alternately, so each is read every 500 ms; six misses is
 // about three seconds of silence before the link is treated as half open.
@@ -478,6 +479,33 @@ bool applyPathHighlight() {
   return active;
 }
 
+// An explicit operator action on the 7-inch or the tablet outranks a node's
+// local latch. Without this a single button press on a bench node would lock the
+// supervisor out of recovering that path, which is exactly backwards for a
+// safety surface. Routine 250 ms state sync still respects local ownership; only
+// deliberate actions break it.
+// Called from LVGL event callbacks, so it must not block: a GATT write with
+// response can take tens of milliseconds and would stall the UI task twice per
+// tap. The bookkeeping is cheap and happens now; loop() sends the writes.
+void forcePathRelease() {
+  for (size_t index = 0; index < 2; ++index) {
+    pathLocalOwned[index] = false;
+    pathLocalLevel[index] = -1;
+    pathBleApplied[index] = 0xFF;
+    pathBleCommandAt[index] = 0;
+  }
+  pathReleasePending = true;
+}
+
+void servicePathRelease() {
+  if (!pathReleasePending) return;
+  pathReleasePending = false;
+  for (size_t index = 0; index < 2; ++index) {
+    if (pathBleControls[index] == nullptr || !pathBleConnected[index]) continue;
+    pathBleControls[index]->writeValue(String("!RECOVER"), true);
+  }
+}
+
 void sendNodeCommand(const String &command) {
   if (!ioNodeConnected) return;
   ioNodeSerial.print(command);
@@ -486,6 +514,9 @@ void sendNodeCommand(const String &command) {
 
 void channelPressed(lv_event_t *event) {
   auto *channel = static_cast<Channel *>(lv_event_get_user_data(event));
+  // The three TSN cards drive path nodes; taking the card means taking
+  // control back from any local latch on that node.
+  if (channel == &channels[0] || channel == &channels[1]) forcePathRelease();
   channel->health = channel->health == Health::healthy ? Health::failed : Health::healthy;
   lastEvent = channel->health == Health::healthy ? "Channel recovered" : "Fault injected";
   refreshUi();
@@ -499,6 +530,7 @@ void setAllHealthy() {
 
 void setExclusivePathFault(int path, bool forwardToNode = true) {
   if (path < 1 || path > 3) return;
+  forcePathRelease();
   for (int i = 0; i < 3; ++i) channels[i].health = Health::healthy;
   channels[path - 1].health = Health::failed;
   lastEvent = "Exclusive path Link Down";
@@ -513,6 +545,7 @@ void setExclusivePathFault(int path, bool forwardToNode = true) {
 }
 
 void setSwitchFault(int switchIndex) {
+  forcePathRelease();
   for (int i = 0; i < 3; ++i) channels[i].health = Health::healthy;
   if (switchIndex == 0) {
     channels[0].health = Health::failed;
@@ -546,6 +579,7 @@ void pathActionPressed(lv_event_t *event) {
     setSwitchFault(static_cast<int>(action - 4));
     return;
   }
+  forcePathRelease();
   setAllHealthy();
   lastEvent = "All network paths recovered";
   refreshUi();
@@ -608,6 +642,7 @@ void scenarioPressed(lv_event_t *event) {
 }
 
 void applyScenarioNumber(int scenario, bool forwardToNode = true) {
+  forcePathRelease();
   setAllHealthy();
   if (scenario == 1) {
     channels[3].health = Health::failed;
@@ -1273,6 +1308,8 @@ void setup() {
 void loop() {
   readCommands();
   readIoNode();
+  // Deferred from the LVGL task so a card tap never waits on two GATT writes.
+  servicePathRelease();
   if (bleSnapshotPending) {
     bleSnapshotPending = false;
     lvgl_port_lock(-1);

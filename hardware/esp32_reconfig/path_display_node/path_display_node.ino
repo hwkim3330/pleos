@@ -47,7 +47,6 @@ constexpr char kBleControlUuid[] = "7d2f0012-7c7a-4f7b-9b51-0af9a281d110";
 Adafruit_ST7789 display(kTftCs, kTftDc, kTftReset);
 String commandBuffer;
 bool isolated = false;
-bool controllerOnline = false;
 uint32_t lastCommandAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastAckAt = 0;
@@ -75,6 +74,7 @@ int8_t previousRingHead = -1;
 uint16_t previousRingAccent = 0;
 bool ringRedrawPending = true;
 volatile bool pollSeen = false;
+volatile bool pendingForceRelease = false;
 volatile int8_t pendingBleCommand = -1;
 volatile uint32_t pendingBleCommandId = 0;
 volatile bool bleDisconnectPending = false;
@@ -155,7 +155,7 @@ void notifyAlert() {
 void sendBleSnapshot(const char *event) {
   if (!bleConnected) return;
   notifyBle(String("!PATH:") + kPathNames[PLEOS_PATH_INDEX] + ":" + sequence + ":" +
-            (controllerOnline ? "ONLINE" : "WAITING"));
+            (bleConnected ? "ONLINE" : "WAITING"));
   notifyBle(String("!CHANNEL:") + kChannelIds[PLEOS_PATH_INDEX] + ":" +
             (isolated ? "ISOLATED" : "NORMAL"));
   notifyBle(statusValue());
@@ -165,21 +165,18 @@ void sendBleSnapshot(const char *event) {
   publishStatusValue();
 }
 
-// Four distinct states, so "no controller" is never confused with "controller
-// present but not yet talking to me" or with an actual injected fault. Standing
-// at the bench you can tell which of those you are looking at.
+// Derived straight from the BLE link and the relay, with no separate
+// "controller is talking to me" flag. That flag depended on the node's onRead
+// callback firing for every poll; if it ever did not, the display could sit on
+// an intermediate state forever. Two observable facts are enough.
 const char *stateName() {
   if (isolated) return "FAULT";
-  if (controllerOnline) return "READY";
-  if (bleConnected) return "SYNC";
-  return "WAIT";
+  return bleConnected ? "READY" : "WAIT";
 }
 
 uint16_t statusColor() {
   if (isolated) return ST77XX_RED;
-  if (controllerOnline) return ST77XX_GREEN;
-  if (bleConnected) return ST77XX_YELLOW;
-  return ST77XX_ORANGE;
+  return bleConnected ? ST77XX_GREEN : ST77XX_ORANGE;
 }
 
 void printCentered(const char *text, int16_t centerX, int16_t baselineY, uint8_t size,
@@ -195,8 +192,8 @@ void printCentered(const char *text, int16_t centerX, int16_t baselineY, uint8_t
 
 void drawLiveMetrics() {
   const uint16_t accent = statusColor();
-  const uint32_t age = controllerOnline ? min(millis() - lastCommandAt, kCommandWatchdogMs) :
-                                          kCommandWatchdogMs;
+  const uint32_t age = bleConnected ? min(millis() - lastCommandAt, kCommandWatchdogMs)
+                                    : kCommandWatchdogMs;
   static const int8_t ringX[] = {0, 7, 10, 7, 0, -7, -10, -7};
   static const int8_t ringY[] = {-10, -7, 0, 7, 10, 7, 0, -7};
   const uint8_t head = (millis() / kUiRefreshMs) % 8;
@@ -265,9 +262,12 @@ void publish() {
 }
 
 void setIsolated(bool value) {
-  if (isolated == value && controllerOnline) return;
+  if (isolated == value) {
+    // No change, but keep the polled value fresh.
+    publishStatusValue();
+    return;
+  }
   isolated = value;
-  controllerOnline = true;
   digitalWrite(kRelayEnable, isolated ? HIGH : LOW);
   ringRedrawPending = true;
   drawLiveMetrics();
@@ -276,7 +276,6 @@ void setIsolated(bool value) {
 
 void recoverSafe() {
   isolated = false;
-  controllerOnline = false;
   commandSource = "SAFE";
   // Fail-safe outranks the local latch: losing the controller must return the
   // pair to NC pass-through and hand ownership back.
@@ -296,7 +295,19 @@ void processCommand(String command) {
   lastCommandAt = millis();
   commandSource = "BLE";
   if (command == "!RECOVER") {
+    localLatched = false;
     setIsolated(false);
+    return;
+  }
+  // Bench affordance: reproduce an upper-button latch without the button, so the
+  // supervisor-overrides-latch behaviour can be tested from a host.
+  if (command == "!LATCH") {
+    localLatched = true;
+    commandSource = "LATCH";
+    setIsolated(true);
+    publishStatusValue();
+    ringRedrawPending = true;
+    drawLiveMetrics();
     return;
   }
   // Bench affordance: exercise the identify effect without the physical button.
@@ -389,7 +400,10 @@ class PathControlCallbacks final : public BLECharacteristicCallbacks {
     if (command == "!SYNC") {
       pendingBleCommand = 2;
     } else if (command == "!RECOVER") {
-      pendingBleCommand = 0;
+      // Explicit operator action from the supervisor: it must break a local
+      // latch. A button on a bench node cannot be allowed to lock the 7-inch
+      // out of recovering the network.
+      pendingForceRelease = true;
     } else if (command.startsWith("!CHANNEL:")) {
       const int separator = command.indexOf(':', 9);
       if (separator >= 0 && command.substring(9, separator) == kChannelIds[PLEOS_PATH_INDEX]) {
@@ -503,6 +517,16 @@ void loop() {
     bleDisconnectPending = false;
     recoverSafe();
   }
+  if (pendingForceRelease) {
+    pendingForceRelease = false;
+    localLatched = false;
+    lastCommandAt = millis();
+    commandSource = "BLE";
+    setIsolated(false);
+    publishStatusValue();
+    ringRedrawPending = true;
+    drawLiveMetrics();
+  }
   const int8_t bleCommand = pendingBleCommand;
   if (bleCommand >= 0) {
     // Latch the id before acting: a second !SET: landing in the BLE callback
@@ -536,12 +560,6 @@ void loop() {
   if (pollSeen) {
     pollSeen = false;
     lastCommandAt = millis();
-    if (!controllerOnline) {
-      controllerOnline = true;
-      if (!localLatched) commandSource = "BLE";
-      ringRedrawPending = true;
-      drawLiveMetrics();
-    }
   }
   pollButtons();
   if (bleSnapshotPending) {
@@ -552,11 +570,10 @@ void loop() {
     ringRedrawPending = true;
     drawLiveMetrics();
   }
-  // Now that polling is a heartbeat, the watchdog protects the BLE transport
-  // too: if the controller dies without a clean disconnect, the pair returns to
-  // NC pass-through. A local latch refreshes lastCommandAt, so an operator
-  // holding a fault is never timed out from under them.
-  if (controllerOnline && millis() - lastCommandAt >= kCommandWatchdogMs) recoverSafe();
+  // On the BLE transport the link itself is the fail-safe: losing the client
+  // fires onDisconnect and recoverSafe(). A poll-age watchdog on top of that
+  // could trip while the link is perfectly healthy, so it stays ESP-NOW only.
+  if (!kUseBleController && millis() - lastCommandAt >= kCommandWatchdogMs) recoverSafe();
   if (!kUseBleController && millis() - lastAckAt >= kAckPeriodMs) {
     lastAckAt = millis();
     sendEspNowAck();
