@@ -111,6 +111,13 @@ volatile int8_t pathAlertIndex = -1;
 constexpr uint32_t kPathReadPeriodMs = 250;
 uint32_t lastPathReadAt = 0;
 size_t pathReadIndex = 0;
+// Identify effect: the lower button on a path node makes that path pulse on the
+// topology map so the operator can see which physical node they are holding.
+constexpr uint32_t kHighlightMs = 3000;
+constexpr uint32_t kHighlightStepMs = 110;
+constexpr int kPathLineWidth = 3;
+uint32_t pathHighlightUntil[3] = {0, 0, 0};
+uint32_t lastHighlightStepAt = 0;
 
 bool isPathOnline(size_t index, uint32_t now = millis()) {
   if (kUseBlePathTransport) {
@@ -380,6 +387,9 @@ void refreshUi() {
     lv_obj_set_style_text_color(channel.value, lv_color_hex(healthColor(channel.health)), 0);
   }
   for (int index = 0; index < 3; ++index) {
+    // Leave a pulsing path alone; applyPathHighlight() owns its appearance until
+    // the effect expires and restores it.
+    if (pathHighlightUntil[index] != 0) continue;
     const uint32_t color = healthColor(channels[index].health);
     for (auto *line : pathLines[index]) {
       if (line != nullptr) lv_obj_set_style_line_color(line, lv_color_hex(color), 0);
@@ -421,6 +431,46 @@ void refreshUi() {
                              (path1Online || path2Online ? 0xF0A83B : 0x687178);
   lv_obj_set_style_text_color(linkLabel, lv_color_hex(linkColor), 0);
   lv_obj_set_style_bg_color(heartbeatDot, lv_color_hex(linkColor), 0);
+}
+
+// Pulses a path's topology lines and its card so the operator can tell at a
+// glance which physical node just called out. Returns true while any path is
+// still pulsing, so loop() knows to keep animating.
+bool applyPathHighlight() {
+  const uint32_t now = millis();
+  bool active = false;
+  for (int index = 0; index < 3; ++index) {
+    if (pathHighlightUntil[index] == 0) continue;
+    auto *button = channels[index].button;
+    if (static_cast<int32_t>(now - pathHighlightUntil[index]) >= 0) {
+      pathHighlightUntil[index] = 0;
+      const uint32_t color = healthColor(channels[index].health);
+      for (auto *line : pathLines[index]) {
+        if (line == nullptr) continue;
+        lv_obj_set_style_line_color(line, lv_color_hex(color), 0);
+        lv_obj_set_style_line_width(line, kPathLineWidth, 0);
+      }
+      if (button != nullptr) {
+        lv_obj_set_style_border_color(button, lv_color_hex(color), 0);
+        lv_obj_set_style_border_width(
+            button, channels[index].health != Health::healthy ? 2 : 1, 0);
+      }
+      continue;
+    }
+    active = true;
+    const bool bright = ((pathHighlightUntil[index] - now) / kHighlightStepMs) % 2;
+    const uint32_t color = bright ? 0xFFFFFF : 0x35E0FF;
+    for (auto *line : pathLines[index]) {
+      if (line == nullptr) continue;
+      lv_obj_set_style_line_color(line, lv_color_hex(color), 0);
+      lv_obj_set_style_line_width(line, bright ? kPathLineWidth + 5 : kPathLineWidth + 1, 0);
+    }
+    if (button != nullptr) {
+      lv_obj_set_style_border_color(button, lv_color_hex(color), 0);
+      lv_obj_set_style_border_width(button, bright ? 4 : 2, 0);
+    }
+  }
+  return active;
 }
 
 void sendNodeCommand(const String &command) {
@@ -1227,8 +1277,10 @@ void loop() {
       // sendState() forwards the event type to the tablet as !EVENT:, which the
       // app raises as a banner naming the path.
       lastEvent = alertIndex == 0 ? "PATH 1 identify" : "PATH 2 identify";
+      pathHighlightUntil[alertIndex] = millis() + kHighlightMs;
       lvgl_port_lock(-1);
       refreshUi();
+      applyPathHighlight();
       lvgl_port_unlock();
       sendState(alertIndex == 0 ? "path_alert_1" : "path_alert_2",
                 channels[alertIndex].id);
@@ -1263,6 +1315,14 @@ void loop() {
     lvgl_port_lock(-1);
     lv_label_set_text(heartbeatLabel, "PATH BLE");
     lvgl_port_unlock();
+  }
+  if (now - lastHighlightStepAt >= kHighlightStepMs) {
+    lastHighlightStepAt = now;
+    if (pathHighlightUntil[0] || pathHighlightUntil[1] || pathHighlightUntil[2]) {
+      lvgl_port_lock(-1);
+      applyPathHighlight();
+      lvgl_port_unlock();
+    }
   }
   // Poll one node per tick, alternating, so a blocking GATT read never stalls
   // the loop for both nodes back to back.

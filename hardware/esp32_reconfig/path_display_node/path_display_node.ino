@@ -70,6 +70,7 @@ const char *commandSource = "SAFE";
 int8_t previousRingHead = -1;
 uint16_t previousRingAccent = 0;
 bool ringRedrawPending = true;
+volatile bool pollSeen = false;
 volatile int8_t pendingBleCommand = -1;
 volatile uint32_t pendingBleCommandId = 0;
 volatile bool bleDisconnectPending = false;
@@ -345,6 +346,12 @@ class PathServerCallbacks final : public BLEServerCallbacks {
 };
 
 class PathControlCallbacks final : public BLECharacteristicCallbacks {
+  // The controller polls this characteristic every 250 ms, so a read is proof
+  // that it is alive and talking to us. Without this the node could not tell it
+  // was being supervised at all once command traffic stopped, and the display
+  // stayed on WAIT forever.
+  void onRead(BLECharacteristic *) override { pollSeen = true; }
+
   void onWrite(BLECharacteristic *characteristic) override {
     String command = characteristic->getValue();
     command.trim();
@@ -502,13 +509,26 @@ void loop() {
     commandSource = "NOW";
     setIsolated(espNowIsolated);
   }
+  if (pollSeen) {
+    pollSeen = false;
+    lastCommandAt = millis();
+    if (!controllerOnline) {
+      controllerOnline = true;
+      if (!localLatched) commandSource = "BLE";
+      ringRedrawPending = true;
+      drawLiveMetrics();
+    }
+  }
   pollButtons();
   if (bleSnapshotPending) {
     bleSnapshotPending = false;
     sendBleSnapshot("connected");
   }
-  if (!kUseBleController && controllerOnline &&
-      millis() - lastCommandAt >= kCommandWatchdogMs) recoverSafe();
+  // Now that polling is a heartbeat, the watchdog protects the BLE transport
+  // too: if the controller dies without a clean disconnect, the pair returns to
+  // NC pass-through. A local latch refreshes lastCommandAt, so an operator
+  // holding a fault is never timed out from under them.
+  if (controllerOnline && millis() - lastCommandAt >= kCommandWatchdogMs) recoverSafe();
   if (!kUseBleController && millis() - lastAckAt >= kAckPeriodMs) {
     lastAckAt = millis();
     sendEspNowAck();

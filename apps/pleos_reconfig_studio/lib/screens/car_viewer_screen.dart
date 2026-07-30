@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:model_viewer_plus/model_viewer_plus.dart';
 
@@ -113,6 +114,10 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
     if (hardware.sequence == _lastAlertSequence) return;
     _lastAlertSequence = hardware.sequence;
     final path = event.substring('path_alert_'.length);
+    // Buzz and chime so the alert lands even when nobody is looking at the
+    // tablet. The 7-inch board has no buzzer, so the tablet carries the sound.
+    HapticFeedback.heavyImpact();
+    SystemSound.play(SystemSoundType.alert);
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
     messenger
