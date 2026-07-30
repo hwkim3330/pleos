@@ -18,6 +18,7 @@ class CarViewerScreen extends ConsumerStatefulWidget {
 
 class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   var _labelsVisible = false;
+  var _lastAlertSequence = -1;
   var _metricsVisible = true;
   var _pathPanelVisible = false;
   var _shellOpacity = 0.15;
@@ -104,12 +105,37 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
     ref.read(viewerServiceProvider).toggleHotspots(_labelsVisible);
   }
 
+  /// Raises a banner when a path node's lower button calls out which path it is.
+  /// Keyed on the controller's sequence so the same alert is shown once.
+  void _showPathAlert(HardwareReconfigState hardware) {
+    final event = hardware.event;
+    if (!event.startsWith('path_alert_')) return;
+    if (hardware.sequence == _lastAlertSequence) return;
+    _lastAlertSequence = hardware.sequence;
+    final path = event.substring('path_alert_'.length);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
+      ..removeCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('PATH $path is calling out from the bench'),
+          backgroundColor: const Color(0xFF0F766E),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     final faults = ref.watch(faultProvider).values.toList();
     final hardware =
         ref.watch(hardwareReconfigProvider).valueOrNull ??
         const HardwareReconfigState();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _showPathAlert(hardware),
+    );
     final mode = hardware.connected
         ? _ReconfigMode.fromHardware(hardware.mode, faults)
         : _ReconfigMode.fromScenario(_selectedScenario, faults);

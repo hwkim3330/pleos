@@ -106,18 +106,45 @@ uint16_t crc16(const uint8_t *data, size_t length) {
   return crc;
 }
 
+// Notifications are best-effort only. The Arduino BLE *client* in the 7-inch
+// controller cannot subscribe: its BLERemoteCharacteristic discovers zero
+// descriptors, so registerForNotify() skips the CCCD write and the peer never
+// enables notifications. The controller therefore polls this characteristic by
+// read instead, which uses the value handle and needs no descriptor discovery.
+constexpr uint32_t kNotifyGapMs = 8;
+
+String statusValue() {
+  return String("!LOCAL:") + (localLatched ? "1" : "0") + ":" +
+         (isolated ? "ISOLATED" : "NORMAL");
+}
+
+// Keep the characteristic value equal to the current status at all times, so a
+// read by the controller always returns the truth.
+void publishStatusValue() {
+  if (bleControl == nullptr) return;
+  bleControl->setValue(statusValue().c_str());
+}
+
 void notifyBle(const String &message) {
   if (!bleConnected || bleControl == nullptr) return;
   bleControl->setValue(message.c_str());
   bleControl->notify();
-  delay(4);
+  delay(kNotifyGapMs);
 }
 
 // Tells the controller who owns this node and what the relay actually is, so a
 // locally latched fault is adopted upstream instead of being invisible there.
+// Sent standalone and repeated every second: the controller adopts it
+// idempotently, so a dropped notification self-heals instead of leaving the
+// 7-inch and the tablet disagreeing with the relay.
 void notifyLocalOwnership() {
-  notifyBle(String("!LOCAL:") + (localLatched ? "1" : "0") + ":" +
-            (isolated ? "ISOLATED" : "NORMAL"));
+  notifyBle(statusValue());
+  publishStatusValue();
+}
+
+// Lower button: ask the operator surfaces to call out which path this is.
+void notifyAlert() {
+  notifyBle(String("!ALERT:") + (PLEOS_PATH_INDEX + 1));
 }
 
 void sendBleSnapshot(const char *event) {
@@ -126,8 +153,11 @@ void sendBleSnapshot(const char *event) {
             (controllerOnline ? "ONLINE" : "WAITING"));
   notifyBle(String("!CHANNEL:") + kChannelIds[PLEOS_PATH_INDEX] + ":" +
             (isolated ? "ISOLATED" : "NORMAL"));
-  notifyLocalOwnership();
+  notifyBle(statusValue());
   notifyBle(String("!EVENT:") + event);
+  // Leave the value holding the status, not the last notification, because the
+  // controller reads this characteristic to learn our state.
+  publishStatusValue();
 }
 
 uint16_t statusColor() {
@@ -351,7 +381,9 @@ void startBle() {
           BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_NOTIFY);
   bleControl->setCallbacks(new PathControlCallbacks());
   bleControl->addDescriptor(new BLE2902());
-  bleControl->setValue("!BOOT:SAFE_BYPASS");
+  // Start from a readable status rather than a boot banner: the controller polls
+  // this value and should get a parseable answer from the first read.
+  bleControl->setValue(statusValue().c_str());
   service->start();
   auto *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(kBleServiceUuid);
@@ -389,9 +421,10 @@ void pollButtons() {
     }
   }
 
-  // Lower button (GPIO35): tap to release ownership back to the network. The
-  // pair returns to pass-through immediately; the next controller command is
-  // applied without waiting for a timer to expire.
+  // Lower button (GPIO35): does not touch the relay. It hands control back to
+  // the network and raises a "this is Path N" alert on the 7-inch and the
+  // tablet, so the two buttons have plainly different jobs: the upper one is
+  // the relay, the lower one is control and attention.
   const bool recoverHigh = digitalRead(kRecoverButton) != LOW;
   if (recoverHigh != recoverButtonHigh && now - recoverButtonChangedAt >= kButtonDebounceMs) {
     recoverButtonHigh = recoverHigh;
@@ -401,7 +434,10 @@ void pollButtons() {
       lastCommandAt = now;
       commandSource = "LOCAL";
       setIsolated(false);
-      sendBleSnapshot("local_release");
+      notifyLocalOwnership();
+      notifyAlert();
+      ringRedrawPending = true;
+      drawLiveMetrics();
     }
   }
 
@@ -457,6 +493,8 @@ void loop() {
       }
       notifyBle(String("!APPLIED:") + commandId + ":" + (isolated ? "HIGH" : "LOW"));
     }
+    // The controller's write left its command in the value; restore the status.
+    publishStatusValue();
   }
   if (!kUseBleController && espNowPending && !localLatched) {
     espNowPending = false;
@@ -478,6 +516,10 @@ void loop() {
   if (millis() - lastHeartbeatAt >= kHeartbeatMs) {
     lastHeartbeatAt = millis();
     Serial.printf("!NODE:%s:HEARTBEAT:%lu\n", kNodeIds[PLEOS_PATH_INDEX], ++sequence);
+    // Re-state ownership and the real relay level once per second. The
+    // controller adopts it only on change, so this costs nothing while it
+    // agrees and repairs the state if a notification was dropped.
+    notifyLocalOwnership();
   }
   if (millis() - lastUiAt >= kUiRefreshMs) {
     lastUiAt = millis();

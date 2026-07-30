@@ -20,7 +20,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.hwkim3330.pleosreconfigstudio"
+        // Distinct from the namespace on purpose: the build deployed from the
+        // Mac is signed with a different debug keystore, so reusing that id
+        // would fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE. This installs
+        // alongside it instead of forcing an uninstall.
+        applicationId = "com.keti.pleos.reconfig"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

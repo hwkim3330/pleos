@@ -103,6 +103,14 @@ uint32_t pathBleCommandAt[2] = {0, 0};
 volatile bool pathLocalPending = false;
 volatile bool pathLocalOwned[2] = {false, false};
 volatile int8_t pathLocalReport[2] = {-1, -1};
+// Last level seen per node, used to ignore the node's 1 Hz restatement when
+// nothing changed.
+volatile int8_t pathLocalLevel[2] = {-1, -1};
+volatile bool pathAlertPending = false;
+volatile int8_t pathAlertIndex = -1;
+constexpr uint32_t kPathReadPeriodMs = 250;
+uint32_t lastPathReadAt = 0;
+size_t pathReadIndex = 0;
 
 bool isPathOnline(size_t index, uint32_t now = millis()) {
   if (kUseBlePathTransport) {
@@ -294,7 +302,7 @@ void sendState(const char *eventType, const char *channelId = "") {
   if (xSemaphoreTake(frameMutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
   BufferPrint payload;
   CborWriter writer(payload);
-  writer.beginMap(10);
+  writer.beginMap(11);
   writeText(writer, "v"); writer.writeUnsignedInt(kProtocolVersion);
   writeText(writer, "seq"); writer.writeUnsignedInt(++sequenceNumber);
   writeText(writer, "uptime_ms"); writer.writeUnsignedInt(millis());
@@ -304,6 +312,18 @@ void sendState(const char *eventType, const char *channelId = "") {
   writeText(writer, "mode"); writeText(writer, effectiveMode);
   writeText(writer, "physical_outputs"); writer.writeBoolean(kPhysicalOutputsEnabled);
   writeText(writer, "io_node_connected"); writer.writeBoolean(ioNodeConnected);
+  // What the controller believes about each path node. The serial transport
+  // previously carried no path state at all, which made a node/controller
+  // disagreement impossible to observe from the host.
+  writeText(writer, "path_nodes");
+  writer.beginMap(2);
+  for (size_t index = 0; index < 2; ++index) {
+    writeText(writer, index == 0 ? "1" : "2");
+    writer.beginMap(3);
+    writeText(writer, "connected"); writer.writeBoolean(pathBleConnected[index]);
+    writeText(writer, "applied"); writer.writeUnsignedInt(pathBleApplied[index]);
+    writeText(writer, "owned"); writer.writeBoolean(pathLocalOwned[index]);
+  }
   writeText(writer, "channels");
   writer.beginMap(kChannelCount);
   for (const auto &channel : channels) {
@@ -645,6 +665,34 @@ class ReconfigControlCallbacks final : public BLECharacteristicCallbacks {
   }
 };
 
+// Parses a node's "!LOCAL:<owned>:<level>" status, whether it arrived by polled
+// read or by notification, and wakes loop() only when something changed.
+void applyPathStatus(size_t index, const String &message) {
+  const int separator = message.indexOf(':', 7);
+  if (separator < 0) return;
+  const bool isolatedNow = message.substring(separator + 1) != "NORMAL";
+  const bool ownedNow = message.substring(7, separator) == "1";
+  const int8_t level = isolatedNow ? 1 : 0;
+  pathBleApplied[index] = level;
+  pathAckAt[index] = millis();
+  if (ownedNow != pathLocalOwned[index] || level != pathLocalLevel[index]) {
+    pathLocalOwned[index] = ownedNow;
+    pathLocalLevel[index] = level;
+    pathLocalReport[index] = level;
+    pathLocalPending = true;
+  }
+}
+
+// Reads one node's status characteristic. This is the authoritative path: the
+// BLE client cannot subscribe for notifications on this library version, so
+// polling the value handle is how the controller learns what the node is doing.
+void pollPathStatus(size_t index) {
+  if (index > 1 || !pathBleConnected[index] || pathBleControls[index] == nullptr) return;
+  if (!pathBleControls[index]->canRead()) return;
+  const String value = pathBleControls[index]->readValue();
+  if (value.startsWith("!LOCAL:")) applyPathStatus(index, value);
+}
+
 void onPathBleNotify(BLERemoteCharacteristic *characteristic, uint8_t *data,
                      size_t length, bool) {
   int index = -1;
@@ -660,14 +708,13 @@ void onPathBleNotify(BLERemoteCharacteristic *characteristic, uint8_t *data,
   // level. Adopt it so the 7-inch cards, the Autoware mode and the tablet
   // follow the hardware instead of silently disagreeing with it.
   if (message.startsWith("!LOCAL:")) {
-    const int separator = message.indexOf(':', 7);
-    if (separator < 0) return;
-    const bool isolatedNow = message.substring(separator + 1) != "NORMAL";
-    pathLocalOwned[index] = message.substring(7, separator) == "1";
-    pathLocalReport[index] = isolatedNow ? 1 : 0;
-    pathBleApplied[index] = isolatedNow ? 1 : 0;
-    pathAckAt[index] = millis();
-    pathLocalPending = true;
+    applyPathStatus(index, message);
+    return;
+  }
+
+  if (message.startsWith("!ALERT:")) {
+    pathAlertIndex = index;
+    pathAlertPending = true;
     return;
   }
 
@@ -696,6 +743,7 @@ class PathBleClientCallbacks final : public BLEClientCallbacks {
     // would keep blocking network commands after it is gone.
     pathLocalOwned[index_] = false;
     pathLocalReport[index_] = -1;
+    pathLocalLevel[index_] = -1;
     pathAckPending = true;
   }
 
@@ -721,9 +769,27 @@ bool connectPathBle(uint8_t index, BLEAdvertisedDevice *device) {
     pathBleClients[index]->disconnect();
     return false;
   }
-  if (pathBleControls[index]->canNotify()) {
-    pathBleControls[index]->registerForNotify(onPathBleNotify);
+  // Subscribing is what makes the node's !APPLIED:/!LOCAL: records arrive. If
+  // this silently fails the controller still commands the node fine, but never
+  // hears back: pathBleApplied stays 0xFF, isPathOnline() reads false forever,
+  // and it reissues the same command every 250 ms.
+  // registerForNotify() returns void in this library version, so its success
+  // cannot be checked; the CCCD write below is what we can actually verify.
+  const bool canNotify = pathBleControls[index]->canNotify();
+  if (canNotify) pathBleControls[index]->registerForNotify(onPathBleNotify);
+  // Belt and braces: write the CCCD directly as well. Harmless if
+  // registerForNotify already did it.
+  bool cccd = false;
+  auto *descriptor =
+      pathBleControls[index]->getDescriptor(BLEUUID(static_cast<uint16_t>(0x2902)));
+  if (descriptor != nullptr) {
+    uint8_t enable[] = {0x01, 0x00};
+    descriptor->writeValue(enable, sizeof(enable), true);
+    cccd = true;
   }
+  // cccd=0 is the expected result on this library version and is why
+  // pollPathStatus() exists; it is logged so the cause stays visible on a bench.
+  Serial.printf("\n!SUBSCRIBE:%d:canNotify=%d:cccd=%d\n", index, canNotify, cccd);
   pathBleConnected[index] = true;
   pathBleApplied[index] = 0xFF;
   pathAckPending = true;
@@ -1154,6 +1220,20 @@ void loop() {
       sendState("path_local", channels[reportedIndex].id);
     }
   }
+  if (pathAlertPending) {
+    pathAlertPending = false;
+    const int8_t alertIndex = pathAlertIndex;
+    if (alertIndex >= 0 && alertIndex < 2) {
+      // sendState() forwards the event type to the tablet as !EVENT:, which the
+      // app raises as a banner naming the path.
+      lastEvent = alertIndex == 0 ? "PATH 1 identify" : "PATH 2 identify";
+      lvgl_port_lock(-1);
+      refreshUi();
+      lvgl_port_unlock();
+      sendState(alertIndex == 0 ? "path_alert_1" : "path_alert_2",
+                channels[alertIndex].id);
+    }
+  }
   // A locally owned node refuses network commands. If a 7-inch card or the
   // tablet just tried to move it, snap the channel back to the real relay level
   // so no surface claims a fault the hardware is not holding.
@@ -1183,6 +1263,13 @@ void loop() {
     lvgl_port_lock(-1);
     lv_label_set_text(heartbeatLabel, "PATH BLE");
     lvgl_port_unlock();
+  }
+  // Poll one node per tick, alternating, so a blocking GATT read never stalls
+  // the loop for both nodes back to back.
+  if (now - lastPathReadAt >= kPathReadPeriodMs) {
+    lastPathReadAt = now;
+    pollPathStatus(pathReadIndex);
+    pathReadIndex ^= 1;
   }
   const uint32_t espNowPeriod = urgentEspNowFrames > 0 ?
       kEspNowUrgentPeriodMs : kEspNowPeriodMs;

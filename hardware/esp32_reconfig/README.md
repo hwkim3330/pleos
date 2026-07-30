@@ -162,13 +162,48 @@ Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC 
 Both user controls are on the display's left edge and are **latching taps**; no
 hold is required.
 
-| Button | Action |
-| --- | --- |
-| Upper (`GPIO0`) | Tap to toggle the relay and take local ownership of the node |
-| Lower (`GPIO35`) | Tap to return to pass-through and release ownership to the network |
+The two buttons have deliberately different jobs — the upper one is the relay,
+the lower one is control and attention:
 
-A latched node reports `!LOCAL:<owned>:<level>` to the 7-inch controller, which
-adopts that level into its channel state. The 7-inch card, the Autoware mode and
+| Button | Action | Touches the relay? |
+| --- | --- | --- |
+| Upper (`GPIO0`) | Tap toggles fault/normal and takes local ownership | Yes |
+| Lower (`GPIO35`) | Tap releases ownership to the network and raises a "PATH n" banner on the tablet and the 7-inch | Returns to pass-through only |
+
+Because the upper button toggles in both directions, the lower button is not
+needed to clear a fault; its purpose is handing control back and identifying
+which physical node you are standing at. The alert travels as `!ALERT:n` to the
+controller, which forwards it as `!EVENT:path_alert_n`; the tablet raises it as
+a snack bar.
+
+### Node status is polled, not notified
+
+**The BLE client in the 7-inch controller cannot subscribe for notifications on
+esp32 core 3.3.0.** `BLERemoteCharacteristic::registerForNotify()` calls
+`esp_ble_gattc_register_for_notify()` and then writes the CCCD only
+`if (getDescriptor(0x2902) != nullptr)` — and that lookup searches a descriptor
+map which comes back **empty** for this peer, so the CCCD write is skipped and
+the node's peer never enables notifications. The controller logs this at connect:
+
+```text
+!SUBSCRIBE:0:canNotify=1:cccd=0
+```
+
+Every notification a path node sends is therefore discarded, `!APPLIED:`
+included. The visible consequences were that `pathBleApplied` stayed `0xFF`
+forever, so `isPathOnline()` reported a live path as offline, the controller
+reissued the same command every 250 ms, and a locally injected fault never
+appeared on the 7-inch or the tablet.
+
+The fix does not fight the library. Each node keeps its characteristic **value**
+equal to its current status (`!LOCAL:<owned>:<level>`) at all times, and the
+controller polls one node per 250 ms tick with `readValue()`, alternating between
+them. A read uses the value handle and needs no descriptor discovery, so it works
+where subscribing does not. `applyPathStatus()` adopts the level only when it
+changes, so polling is free while node and controller agree. Notifications are
+still emitted as best-effort in case a future core fixes the CCCD path, which is
+why `publishStatusValue()` restores the status value after every notify burst and
+after each command write. The 7-inch card, the Autoware mode and
 the tablet therefore follow the real relay instead of disagreeing with it, and
 the 7-inch link line shows `LCL` for a locally owned path. While a node is
 latched the controller stops commanding it, and the node still answers

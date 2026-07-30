@@ -26,7 +26,7 @@
     <uses-permission android:name="ai.pleos.playground.service.vehicle.VEHICLE_BINDING" />
     <uses-permission android:name="android.car.permission.CAR_SPEED" />
     <application
-        android:label="PLEOS Reconfig Studio"
+        android:label="PLEOS Reconfig"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
