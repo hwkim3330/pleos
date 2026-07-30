@@ -110,7 +110,11 @@ volatile bool pathAlertPending = false;
 volatile int8_t pathAlertIndex = -1;
 volatile long pathAlertSeqSeen[2] = {-1, -1};
 volatile bool pathForceNext[2] = {false, false};
-constexpr uint32_t kPathReadPeriodMs = 250;
+volatile bool pathDropClear[2] = {false, false};
+// 400 ms alternating means each node is read every 800 ms. Polling at 250 ms
+// added GATT airtime on top of two client links, a server link and advertising
+// for no benefit: the heartbeat is 1 s anyway.
+constexpr uint32_t kPathReadPeriodMs = 400;
 // Nodes are polled alternately, so each is read every 500 ms; six misses is
 // about three seconds of silence before the link is treated as half open.
 constexpr uint8_t kPathReadFailLimit = 6;
@@ -501,13 +505,19 @@ bool applyPathHighlight() {
 // FAULT -> READY -> FAULT bounce and briefly closed a path meant to stay open.
 // The break is folded into the next state write as !FORCE: so it costs one
 // message instead of a recover-then-set round trip.
+void forcePathReleaseOne(size_t index) {
+  if (index > 1 || !pathLocalOwned[index]) return;
+  pathLocalOwned[index] = false;
+  pathLocalLevel[index] = -1;
+  pathForceNext[index] = true;
+}
+
+// Only for actions that legitimately rewrite every path: recover-all, exclusive
+// path faults, switch faults and scenarios. Tapping a single card must not
+// revoke the other node's local ownership, which could re-assert its relay from
+// a mirrored level the local operator had just cleared.
 void forcePathRelease() {
-  for (size_t index = 0; index < 2; ++index) {
-    if (!pathLocalOwned[index]) continue;
-    pathLocalOwned[index] = false;
-    pathLocalLevel[index] = -1;
-    pathForceNext[index] = true;
-  }
+  for (size_t index = 0; index < 2; ++index) forcePathReleaseOne(index);
 }
 
 void sendNodeCommand(const String &command) {
@@ -518,9 +528,9 @@ void sendNodeCommand(const String &command) {
 
 void channelPressed(lv_event_t *event) {
   auto *channel = static_cast<Channel *>(lv_event_get_user_data(event));
-  // The three TSN cards drive path nodes; taking the card means taking
-  // control back from any local latch on that node.
-  if (channel == &channels[0] || channel == &channels[1]) forcePathRelease();
+  // The card drives one path node; take control back from that node only.
+  if (channel == &channels[0]) forcePathReleaseOne(0);
+  if (channel == &channels[1]) forcePathReleaseOne(1);
   channel->health = channel->health == Health::healthy ? Health::failed : Health::healthy;
   lastEvent = channel->health == Health::healthy ? "Channel recovered" : "Fault injected";
   refreshUi();
@@ -783,6 +793,11 @@ void applyPathStatus(size_t index, const String &message) {
   const bool wasOwned = pathLocalOwned[index];
   pathBleApplied[index] = level;
   pathAckAt[index] = millis();
+  // A forced write is already armed for this node, so its status is about to
+  // change. Adopting the pre-force report here would rewrite channels[] from
+  // stale data, and sendEspNowState() derives the forced level from channels[]
+  // at send time -- so a recover could go out as a FAULT.
+  if (pathForceNext[index]) return;
   if (ownedNow != wasOwned || level != pathLocalLevel[index]) {
     pathLocalOwned[index] = ownedNow;
     pathLocalLevel[index] = level;
@@ -890,6 +905,13 @@ class PathBleClientCallbacks final : public BLEClientCallbacks {
     // Re-baseline on reconnect so the first poll does not look like an alert.
     pathAlertSeqSeen[index_] = -1;
     pathForceNext[index_] = false;
+    // The node fail-safes to pass-through when the link drops and clears its
+    // latch. If the fault we are holding was adopted from that latch, it has no
+    // author any more: leaving channels[] at FAULT made the controller
+    // re-inject it about a second after reconnect, overriding the node's
+    // fail-safe with a command no operator ever gave.
+    if (pathLocalOwned[index_]) pathDropClear[index_] = true;
+    pathLocalOwned[index_] = false;
     pathAckPending = true;
   }
 
@@ -949,7 +971,11 @@ void pathBleConnectionTask(void *) {
   scan->setWindow(80);
   for (;;) {
     if (!pathBleConnected[0] || !pathBleConnected[1]) {
-      auto *results = scan->start(2, false);
+      // Keep the scan burst short. A 2 s blocking scan with only a 250 ms gap
+      // meant that while one node was missing the radio scanned about 89% of
+      // the time, which pushes the surviving links and the tablet off and turns
+      // one drop into a cascade of drops.
+      auto *results = scan->start(1, false);
       if (results != nullptr) {
         for (int i = 0; i < results->getCount(); ++i) {
           auto device = results->getDevice(i);
@@ -964,9 +990,9 @@ void pathBleConnectionTask(void *) {
       }
       scan->clearResults();
       if (!bleConnected) BLEDevice::startAdvertising();
-      // Keep retrying briskly while a node is missing; a path node that is
-      // powered but unreachable is the one state nobody can fix from the UI.
-      vTaskDelay(pdMS_TO_TICKS(250));
+      // Leave real airtime between bursts so the healthy links stay up. This is
+      // roughly a 55% duty cycle, still reconnecting in about two seconds.
+      vTaskDelay(pdMS_TO_TICKS(800));
       continue;
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1349,6 +1375,17 @@ void loop() {
     refreshUi();
     lvgl_port_unlock();
     publishBleState("path_ack", true);
+  }
+  for (size_t index = 0; index < 2; ++index) {
+    if (!pathDropClear[index]) continue;
+    pathDropClear[index] = false;
+    if (channels[index].health == Health::healthy) continue;
+    channels[index].health = Health::healthy;
+    lastEvent = "Local fault dropped with its link";
+    lvgl_port_lock(-1);
+    refreshUi();
+    lvgl_port_unlock();
+    sendState("path_local_dropped", channels[index].id);
   }
   if (pathLocalPending) {
     pathLocalPending = false;

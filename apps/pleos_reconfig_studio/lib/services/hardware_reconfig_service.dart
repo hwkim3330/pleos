@@ -142,7 +142,14 @@ class HardwareReconfigService {
       await control.setNotifyValue(true);
       await _requestSync();
     } catch (_) {
-      await device.disconnect();
+      // disconnect() itself throws when the adapter went away, and that used to
+      // skip _bleDisconnected(): no timer, no scan, no subscription, so the
+      // service stayed dead until an app restart even after Bluetooth returned.
+      try {
+        await device.disconnect();
+      } catch (_) {
+        // Already gone; the reconnect path below is what matters.
+      }
       _bleDisconnected();
     } finally {
       _gattConnecting = false;
@@ -298,7 +305,23 @@ class HardwareReconfigService {
       } else {
         wireCommand = '!CHANNEL:${command['id']}:${command['health']}';
       }
-      control.write(utf8.encode(wireCommand), withoutResponse: false);
+      // A dropped operator command matters on a surface that drives relays, so
+      // surface the failure instead of letting the future's error vanish.
+      control.write(utf8.encode(wireCommand), withoutResponse: false).catchError((
+        Object _,
+      ) {
+        _states.add(
+          HardwareReconfigState(
+            connected: true,
+            mode: _bleMode,
+            event: 'Command failed: $wireCommand',
+            channels: Map.unmodifiable(_bleChannels),
+            sequence: _bleSequence,
+            ioNodeConnected: _bleIoNodeConnected,
+            pathNodes: Map.unmodifiable(_blePathNodes),
+          ),
+        );
+      });
       return;
     }
     _socket?.add(jsonEncode(command));

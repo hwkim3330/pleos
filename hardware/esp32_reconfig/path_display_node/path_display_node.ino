@@ -83,9 +83,32 @@ int8_t previousRingHead = -1;
 uint16_t previousRingAccent = 0;
 bool ringRedrawPending = true;
 volatile bool pollSeen = false;
-volatile bool pendingForceRelease = false;
-volatile int8_t pendingBleCommand = -1;
-volatile uint32_t pendingBleCommandId = 0;
+// The BLE callback runs on another task, so level/force/id must be published and
+// consumed as one unit. Read separately, a torn observation could see the force
+// flag without its level and drive the relay LOW mid-injection, or apply a level
+// and then run an orphaned release that drops it -- uncommanded relay motion
+// either way. A spinlock-guarded slot removes the whole class.
+portMUX_TYPE commandMux = portMUX_INITIALIZER_UNLOCKED;
+struct PendingCommand {
+  int8_t level = -1;   // -1 none, 0 SAFE, 1 FAULT, 2 sync request
+  bool force = false;
+  uint32_t id = 0;
+};
+PendingCommand pendingCommand;
+
+void postCommand(int8_t level, bool force, uint32_t id) {
+  portENTER_CRITICAL(&commandMux);
+  pendingCommand = {level, force, id};
+  portEXIT_CRITICAL(&commandMux);
+}
+
+PendingCommand takeCommand() {
+  portENTER_CRITICAL(&commandMux);
+  const PendingCommand taken = pendingCommand;
+  pendingCommand = PendingCommand{};
+  portEXIT_CRITICAL(&commandMux);
+  return taken;
+}
 volatile bool bleDisconnectPending = false;
 BLECharacteristic *bleControl = nullptr;
 volatile bool bleConnected = false;
@@ -171,6 +194,9 @@ void notifyLocalOwnership() {
 // Lower button: ask the operator surfaces to call out which path this is.
 void notifyAlert() {
   notifyBle(String("!ALERT:") + (PLEOS_PATH_INDEX + 1));
+  // The controller polls this value; leaving !ALERT: in it makes those reads
+  // count as failures against the half-open-link detector and delays the alert.
+  publishStatusValue();
 }
 
 void sendBleSnapshot(const char *event) {
@@ -395,6 +421,17 @@ void sendEspNowAck() {
 }
 
 class PathServerCallbacks final : public BLEServerCallbacks {
+  void onConnect(BLEServer *server, esp_ble_gatts_cb_param_t *param) override {
+    bleConnected = true;
+    bleSnapshotPending = true;
+    // Ask for a roomier link. The default supervision timeout is short enough
+    // that a couple of missed connection events drops the link, and the node
+    // then fails safe and shows WAIT for no good reason. Intervals are 1.25 ms
+    // units, timeout is 10 ms units: 30-50 ms interval with a 4 s timeout, so
+    // the link survives a burst of interference instead of tearing down.
+    server->updateConnParams(param->connect.remote_bda, 24, 40, 0, 400);
+  }
+
   void onConnect(BLEServer *) override {
     bleConnected = true;
     bleSnapshotPending = true;
@@ -422,8 +459,7 @@ class PathControlCallbacks final : public BLECharacteristicCallbacks {
       if (separator > 5) {
         const int8_t level = parseLevel(command.substring(separator + 1));
         if (level < 0) return;
-        pendingBleCommandId = command.substring(5, separator).toInt();
-        pendingBleCommand = level;
+        postCommand(level, false, command.substring(5, separator).toInt());
       }
       return;
     }
@@ -435,24 +471,22 @@ class PathControlCallbacks final : public BLECharacteristicCallbacks {
       if (separator > 7) {
         const int8_t level = parseLevel(command.substring(separator + 1));
         if (level < 0) return;
-        pendingBleCommandId = command.substring(7, separator).toInt();
-        pendingBleCommand = level;
-        pendingForceRelease = true;
+        postCommand(level, true, command.substring(7, separator).toInt());
       }
       return;
     }
     if (command == "!SYNC") {
-      pendingBleCommand = 2;
+      postCommand(2, false, 0);
     } else if (command == "!RECOVER") {
       // Explicit operator action from the supervisor: it must break a local
       // latch. A button on a bench node cannot be allowed to lock the 7-inch
       // out of recovering the network.
-      pendingForceRelease = true;
+      postCommand(-1, true, 0);
     } else if (command.startsWith("!CHANNEL:")) {
       const int separator = command.indexOf(':', 9);
       if (separator >= 0 && command.substring(9, separator) == kChannelIds[PLEOS_PATH_INDEX]) {
         const int8_t level = parseLevel(command.substring(separator + 1));
-        if (level >= 0) pendingBleCommand = level;
+        if (level >= 0) postCommand(level, false, 0);
       }
     }
   }
@@ -578,9 +612,11 @@ void loop() {
     bleDisconnectPending = false;
     recoverSafe();
   }
-  const int8_t bleCommand = pendingBleCommand;
-  if (pendingForceRelease) {
-    pendingForceRelease = false;
+  // One atomic take: level and force can never be observed apart, so the relay
+  // cannot visit an intermediate state between them.
+  const PendingCommand command = takeCommand();
+  const int8_t bleCommand = command.level;
+  if (command.force) {
     localLatched = false;
     lastCommandAt = millis();
     commandSource = "BLE";
@@ -597,8 +633,7 @@ void loop() {
   if (bleCommand >= 0) {
     // Latch the id before acting: a second !SET: landing in the BLE callback
     // would otherwise make us echo an id the controller no longer recognises.
-    const uint32_t commandId = pendingBleCommandId;
-    pendingBleCommand = -1;
+    const uint32_t commandId = command.id;
     if (bleCommand == 2) {
       sendBleSnapshot("sync");
     } else {
