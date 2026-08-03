@@ -1052,6 +1052,18 @@ void pathBleConnectionTask(void *) {
   scan->setInterval(100);
   scan->setWindow(80);
   for (;;) {
+    // Re-arm advertising first, on every tick, before any early return.
+    //
+    // This used to sit further down, inside the branch that only runs when a node is
+    // missing -- so with both nodes healthy the controller never reached it. If the tablet
+    // link then went away without producing an onDisconnect (an app killed while the ESP
+    // still held the ACL, for instance), nothing ever started advertising again and the
+    // controller went silent for good: nodes fine, 7-inch powered and on screen, tablet
+    // unable to find it. Observed exactly that after the boards moved to their own power.
+    // startAdvertising() while already advertising is a no-op, so calling it every couple
+    // of seconds costs nothing and removes the whole failure mode.
+    if (!bleConnected) BLEDevice::startAdvertising();
+
     const bool missing[2] = {!pathBleConnected[0], !pathBleConnected[1]};
     if (!missing[0] && !missing[1]) {
       vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1089,7 +1101,6 @@ void pathBleConnectionTask(void *) {
       }
       scan->clearResults();
     }
-    if (!bleConnected) BLEDevice::startAdvertising();
 
     // Both gone means there is no healthy link left to protect, so retry sooner.
     // With one still up, back off and give it the airtime. Do not retry faster
