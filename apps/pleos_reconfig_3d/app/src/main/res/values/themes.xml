@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window background matches the Compose background so the launch frame
+         does not flash white before the first rendered frame. -->
+    <style name="Theme.Reconfig3D" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF07090A</item>
+        <item name="android:statusBarColor">#FF07090A</item>
+        <item name="android:navigationBarColor">#FF07090A</item>
+    </style>
+</resources>
