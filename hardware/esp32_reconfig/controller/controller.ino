@@ -94,6 +94,44 @@ volatile bool pathAckPending = false;
 BLEClient *pathBleClients[2] = {nullptr, nullptr};
 BLERemoteCharacteristic *pathBleControls[2] = {nullptr, nullptr};
 volatile bool pathBleConnected[2] = {false, false};
+// Each node's address, learned the first time it is seen in a scan. Scanning is
+// what used to cost us the link: with one node missing the radio scanned in a
+// tight burst loop, which pushed the surviving node off too, and one drop became
+// both. A node's address never changes, so after the first discovery we reconnect
+// straight to it and never scan again while a link is up.
+uint8_t pathBleAddress[2][6] = {{0}, {0}};
+uint8_t pathBleAddressType[2] = {0, 0};
+bool pathBleAddressKnown[2] = {false, false};
+// Self-heal backstop, and it has to live in loop() rather than in the path task.
+// BLEClient::connect() registers a fresh Bluedroid GATTC app on every call and
+// never unregisters it on failure, so a controller that has reconnected enough
+// times exhausts that small pool for good. Once it does, the registration event
+// never arrives and the library waits on it with no timeout at all: the path task
+// blocks inside connect() permanently, which is exactly how the controller ended
+// up holding neither node with no way back. A watchdog inside that task cannot
+// fire because the task is the thing that is stuck. loop() is never blocked by a
+// client call, so it is the one place that can still act.
+//
+// Rebooting costs about five seconds, drives the relay pin LOW on the way down
+// and lets both nodes fail safe, and it hands back a fresh app-id budget, so it
+// is strictly better than sitting wedged with a dead lower link.
+// Any node missing counts, not just both. A node that cannot be reconnected is a
+// path the operator cannot command, and the blocked-forever connect() above means
+// the retry loop is not coming back on its own -- the first repro showed one node
+// staying gone for a minute while the other stayed up. Twenty seconds is well past
+// the two a healthy reconnect takes.
+constexpr uint32_t kNodeLostRebootMs = 20000;
+// Separate, and longer, because at power-up the nodes may simply not be running
+// yet. Without this the controller would reboot every twenty seconds while it
+// waited for them, which is harmless -- the relay stays LOW -- but looks broken.
+constexpr uint32_t kNodeSearchGraceMs = 45000;
+uint32_t nodeLostSince = 0;
+// Survives esp_restart but not a power cycle, which is exactly the lifetime we
+// want: rebooting cannot fix a node that is switched off or physically removed,
+// and a controller looping through reboots forever is worse than one sitting
+// there degraded with `P2 --` on screen. Three attempts, then leave it alone.
+constexpr uint32_t kMaxSelfHeals = 3;
+RTC_DATA_ATTR uint32_t selfHealCount = 0;
 volatile uint8_t pathBleApplied[2] = {0xFF, 0xFF};
 uint32_t pathBleCommandId[2] = {0, 0};
 uint32_t pathBleCommandAt[2] = {0, 0};
@@ -444,7 +482,7 @@ void refreshUi() {
   const bool path1Online = isPathOnline(0, now);
   const bool path2Online = isPathOnline(1, now);
   lv_label_set_text_fmt(linkLabel, "TABLET %s | P1 %s | P2 %s",
-                        bleConnected ? "ON" : "WAIT",
+                        bleConnected ? "ON" : "--",
                         pathLocalOwned[0] ? "LCL" : (path1Online ? "ACK" : "--"),
                         pathLocalOwned[1] ? "LCL" : (path2Online ? "ACK" : "--"));
   const uint32_t linkColor = path1Online && path2Online ? 0x66D6B1 :
@@ -919,13 +957,37 @@ class PathBleClientCallbacks final : public BLEClientCallbacks {
   uint8_t index_;
 };
 
+// One instance per node, owned here rather than new'd per connect attempt: the
+// client object outlives every reconnect, so allocating a callback each time
+// leaked one per drop.
+PathBleClientCallbacks pathBleCallbacks[2] = {PathBleClientCallbacks(0),
+                                              PathBleClientCallbacks(1)};
+
+// Passing nullptr reconnects to the address remembered from the first discovery,
+// which is the normal path once a node has been seen. A fresh BLEClient is not
+// created per attempt on purpose: every createClient() registers another Bluedroid
+// GATTC app and those are a small fixed pool, so recreating one per reconnect
+// would run the controller out of them after a handful of drops.
 bool connectPathBle(uint8_t index, BLEAdvertisedDevice *device) {
   if (index > 1 || pathBleConnected[index]) return true;
+  if (device == nullptr && !pathBleAddressKnown[index]) return false;
   if (pathBleClients[index] == nullptr) {
     pathBleClients[index] = BLEDevice::createClient();
-    pathBleClients[index]->setClientCallbacks(new PathBleClientCallbacks(index));
+    pathBleClients[index]->setClientCallbacks(&pathBleCallbacks[index]);
   }
-  if (!pathBleClients[index]->connectTimeout(device, 1500)) return false;
+  // 1500 ms was too tight to win against an active tablet link and a server
+  // role, so a reconnect could fail purely on timing and then be retried
+  // forever. Three connection intervals of headroom is still fast enough that
+  // the operator sees the node come back within a second or two.
+  if (device != nullptr) {
+    if (!pathBleClients[index]->connectTimeout(device, 4000)) return false;
+    memcpy(pathBleAddress[index], device->getAddress().getNative(), 6);
+    pathBleAddressType[index] = device->getAddressType();
+    pathBleAddressKnown[index] = true;
+  } else if (!pathBleClients[index]->connect(BLEAddress(pathBleAddress[index]),
+                                             pathBleAddressType[index], 4000)) {
+    return false;
+  }
   pathBleClients[index]->setMTU(185);
   auto *service = pathBleClients[index]->getService(BLEUUID(kPathBleServiceUuid));
   if (service == nullptr) {
@@ -970,11 +1032,28 @@ void pathBleConnectionTask(void *) {
   scan->setInterval(100);
   scan->setWindow(80);
   for (;;) {
-    if (!pathBleConnected[0] || !pathBleConnected[1]) {
-      // Keep the scan burst short. A 2 s blocking scan with only a 250 ms gap
-      // meant that while one node was missing the radio scanned about 89% of
-      // the time, which pushes the surviving links and the tablet off and turns
-      // one drop into a cascade of drops.
+    const bool missing[2] = {!pathBleConnected[0], !pathBleConnected[1]};
+    if (!missing[0] && !missing[1]) {
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+
+    // Reconnect straight to a known address first. This is the whole point of
+    // remembering it: no scan means no radio contention with the links that are
+    // still up, so losing one node can no longer cost us the other.
+    bool needScan = false;
+    for (uint8_t index = 0; index < 2; ++index) {
+      if (!missing[index]) continue;
+      if (pathBleAddressKnown[index]) {
+        connectPathBle(index, nullptr);
+      } else {
+        needScan = true;
+      }
+    }
+
+    // Scanning is now only first-contact discovery, so it runs when a node has
+    // never been seen -- at boot, or after one is physically swapped.
+    if (needScan) {
       auto *results = scan->start(1, false);
       if (results != nullptr) {
         for (int i = 0; i < results->getCount(); ++i) {
@@ -989,13 +1068,15 @@ void pathBleConnectionTask(void *) {
         }
       }
       scan->clearResults();
-      if (!bleConnected) BLEDevice::startAdvertising();
-      // Leave real airtime between bursts so the healthy links stay up. This is
-      // roughly a 55% duty cycle, still reconnecting in about two seconds.
-      vTaskDelay(pdMS_TO_TICKS(800));
-      continue;
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    if (!bleConnected) BLEDevice::startAdvertising();
+
+    // Both gone means there is no healthy link left to protect, so retry sooner.
+    // With one still up, back off and give it the airtime. Do not retry faster
+    // than this: every BLEClient::connect() burns a Bluedroid GATTC app id (see
+    // the watchdog in loop()), so hammering the radio spends a scarce resource.
+    const bool bothGone = !pathBleConnected[0] && !pathBleConnected[1];
+    vTaskDelay(pdMS_TO_TICKS(bothGone ? 1000 : 2000));
   }
 }
 
@@ -1034,6 +1115,34 @@ void readIoNode() {
       ioNodeBuffer += value;
     }
   }
+}
+
+// Runs from loop(), deliberately: see kNodeLostRebootMs.
+void checkNodeLinkWatchdog() {
+  if (!kUseBlePathTransport) return;
+  const uint32_t now = millis();
+  if (pathBleConnected[0] && pathBleConnected[1]) {
+    // A full lower link is the only proof a self-heal worked, so this is where the
+    // budget is handed back. Leaving it armed would let three unrelated drops over
+    // a long session use it up.
+    nodeLostSince = 0;
+    selfHealCount = 0;
+    return;
+  }
+  // Give the boot scan its own grace period, or the controller would reboot in a
+  // loop before it has ever had a chance to find a node.
+  if (now < kNodeSearchGraceMs) return;
+  if (nodeLostSince == 0) {
+    nodeLostSince = now;
+    return;
+  }
+  if (now - nodeLostSince <= kNodeLostRebootMs) return;
+  if (selfHealCount >= kMaxSelfHeals) return;
+  ++selfHealCount;
+  Serial.printf("\n!SELFHEAL:NODE_LOST:%lu\n", selfHealCount);
+  Serial.flush();
+  digitalWrite(kPath3RelayEnable, LOW);
+  esp_restart();
 }
 
 void readCommands() {
@@ -1360,6 +1469,7 @@ void setup() {
 }
 
 void loop() {
+  checkNodeLinkWatchdog();
   readCommands();
   readIoNode();
   if (bleSnapshotPending) {

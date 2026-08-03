@@ -201,8 +201,10 @@ void notifyAlert() {
 
 void sendBleSnapshot(const char *event) {
   if (!bleConnected) return;
-  notifyBle(String("!PATH:") + kPathNames[PLEOS_PATH_INDEX] + ":" + sequence + ":" +
-            (bleConnected ? "ONLINE" : "WAITING"));
+  // Unreachable unless a client is attached -- see the guard above -- so this was
+  // always ONLINE and the ternary only suggested a WAITING case that cannot ship.
+  notifyBle(String("!PATH:") + kPathNames[PLEOS_PATH_INDEX] + ":" + sequence +
+            ":ONLINE");
   notifyBle(String("!CHANNEL:") + kChannelIds[PLEOS_PATH_INDEX] + ":" +
             (isolated ? "ISOLATED" : "NORMAL"));
   notifyBle(statusValue());
@@ -212,18 +214,19 @@ void sendBleSnapshot(const char *event) {
   publishStatusValue();
 }
 
-// Derived straight from the BLE link and the relay, with no separate
-// "controller is talking to me" flag. That flag depended on the node's onRead
-// callback firing for every poll; if it ever did not, the display could sit on
-// an intermediate state forever. Two observable facts are enough.
+// The big word on the node reports one thing only: what this node's relay is
+// doing. It used to also encode the BLE link -- an orange WAIT when no client was
+// attached -- and that was actively misleading, because a node with no controller
+// still has its relay in NC pass-through and the Ethernet pair still passes
+// traffic. Standing at the bench you would read WAIT as "this link is down". The
+// link is not gone from the display: SOURCE names who is in control, and the
+// heartbeat ring shows command age.
 const char *stateName() {
-  if (isolated) return "FAULT";
-  return bleConnected ? "READY" : "WAIT";
+  return isolated ? "FAULT" : "NORMAL";
 }
 
 uint16_t statusColor() {
-  if (isolated) return ST77XX_RED;
-  return bleConnected ? ST77XX_GREEN : ST77XX_ORANGE;
+  return isolated ? ST77XX_RED : ST77XX_GREEN;
 }
 
 void printCentered(const char *text, int16_t centerX, int16_t baselineY, uint8_t size,
@@ -426,9 +429,9 @@ class PathServerCallbacks final : public BLEServerCallbacks {
     bleSnapshotPending = true;
     // Ask for a roomier link. The default supervision timeout is short enough
     // that a couple of missed connection events drops the link, and the node
-    // then fails safe and shows WAIT for no good reason. Intervals are 1.25 ms
-    // units, timeout is 10 ms units: 30-50 ms interval with a 4 s timeout, so
-    // the link survives a burst of interference instead of tearing down.
+    // then fails safe for no good reason. Intervals are 1.25 ms units, timeout
+    // is 10 ms units: 30-50 ms interval with a 4 s timeout, so the link survives
+    // a burst of interference instead of tearing down.
     server->updateConnParams(param->connect.remote_bda, 24, 40, 0, 400);
   }
 
@@ -445,10 +448,9 @@ class PathServerCallbacks final : public BLEServerCallbacks {
 };
 
 class PathControlCallbacks final : public BLECharacteristicCallbacks {
-  // The controller polls this characteristic every 250 ms, so a read is proof
-  // that it is alive and talking to us. Without this the node could not tell it
-  // was being supervised at all once command traffic stopped, and the display
-  // stayed on WAIT forever.
+  // The controller polls this characteristic, so a read is proof that it is alive
+  // and talking to us. That is what keeps the heartbeat ring's command age fresh
+  // once command traffic stops.
   void onRead(BLECharacteristic *) override { pollSeen = true; }
 
   void onWrite(BLECharacteristic *characteristic) override {
@@ -465,7 +467,7 @@ class PathControlCallbacks final : public BLECharacteristicCallbacks {
     }
     // Break the local latch and apply the level in one step. Doing it as
     // !RECOVER followed by !SET: made the relay visit pass-through on the way,
-    // which showed up as a FAULT -> READY -> FAULT bounce on the display.
+    // which showed up as a FAULT -> NORMAL -> FAULT bounce on the display.
     if (command.startsWith("!FORCE:")) {
       const int separator = command.indexOf(':', 7);
       if (separator > 7) {
@@ -666,8 +668,8 @@ void loop() {
   if (bleSnapshotPending) {
     bleSnapshotPending = false;
     sendBleSnapshot("connected");
-    // A client just attached: leave WAIT for SYNC immediately rather than
-    // waiting for the first poll to land.
+    // A client just attached, so repaint the ring in the current accent colour
+    // instead of leaving the previous one until the next refresh tick.
     ringRedrawPending = true;
     drawLiveMetrics();
   }

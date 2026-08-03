@@ -33,6 +33,38 @@ Use USB CBOR only for maintenance:
   --transport serial --serial /dev/cu.usbmodem59580282341
 ```
 
+### Keeping the lower link up
+
+Two things used to make the controller-to-node links fragile, and both are fixed
+in firmware rather than worked around in the demo script.
+
+**Scanning cost us links.** While one node was missing the controller scanned in
+a tight burst loop to find it, and that airtime pushed the *surviving* node off
+too, so one drop reliably became both. The controller now remembers each node's
+address the first time it sees it and reconnects straight to that address, so a
+missing node no longer costs the operator the one that is still working.
+Scanning is only first contact: at boot, or after a board is swapped.
+
+**A reconnect could block forever.** `BLEClient::connect()` registers a new
+Bluedroid GATTC app on every call and does not unregister it when the call
+fails, and that pool is small. Once it is exhausted the registration event never
+arrives, and the library waits on it with no timeout — the reconnect task blocks
+permanently inside `connect()`. That is what left the controller holding neither
+node with no way back, and no watchdog inside that task could have fired,
+because the task is the thing that is stuck.
+
+So the backstop lives in `loop()`, which a client call never blocks. If any node
+link stays down for 20 s, the controller reboots itself: relays go LOW on the
+way down, both nodes fail safe, both links are re-acquired in about three
+seconds and the tablet reconnects on its own. Measured end to end, a total loss
+of both nodes now restores itself in about 24 s and a single lost node in about
+28 s, where before either state was permanent until all three boards were reset
+by hand.
+
+Reboots are capped at three (counted in RTC memory, so a power cycle clears it).
+Rebooting cannot fix a node that is switched off or unplugged, and a controller
+looping forever is worse than one sitting there degraded showing `P2 --`.
+
 ### Runs on power alone
 
 The three boards must work with **nothing but power connected** — no host, no
@@ -41,10 +73,12 @@ framed-CBOR output goes to a hardware UART, so it never blocks when no one is
 reading, and the tablet reaches the controller directly over BLE. The bridge and
 the serial bench commands are extra tools, never dependencies.
 
-One consequence worth knowing while debugging: **opening the controller's serial
-port resets the board.** Every host attach shows `uptime` restarting, which drops
-both path nodes to `WAIT` for a few seconds until the controller rescans and
-reconnects. That is an artifact of attaching a host, not a field fault.
+One consequence worth knowing while debugging: **opening a path node's serial port
+resets that board**, because DTR/RTS are wired to its auto-reset circuit. The node
+reboots, its link to the controller drops, and the controller re-acquires it — an
+artifact of attaching a host, not a field fault. The 7-inch controller does *not*
+reset on open; its `uptime_ms` keeps climbing across host attaches, so it is safe
+to watch its CBOR stream mid-demo.
 
 After a controller restart both nodes are reconnected and polled within about
 five seconds.
@@ -174,21 +208,24 @@ The classic ESP32/ST7789 nodes are non-touch status displays. Flash the first bo
 ```
 
 Path1 listens to `tsn_front_a`; Path2 listens to `tsn_front_b`. Both boot in NC
-bypass. The large state word distinguishes four cases, so "no controller" is
-never confused with "controller attached but not talking to me" or with a real
-injected fault:
+bypass. The large state word reports **only what this node's relay is doing**:
 
 | State | Colour | Meaning |
 | --- | --- | --- |
-| `WAIT` | orange | No BLE client attached |
-| `SYNC` | yellow | Controller attached, no status poll yet |
-| `READY` | green | Being polled, relay in NC pass-through |
+| `NORMAL` | green | Relay in NC pass-through, pair passing traffic |
 | `FAULT` | red | Relay open, pair isolated |
 
+It used to also encode the BLE link, as an orange `WAIT` when no client was
+attached, and that was misleading rather than informative: a node with no
+controller still holds its relay in NC pass-through and the Ethernet pair still
+passes traffic, so at the bench `WAIT` read as "this link is down". The link has
+not disappeared from the display — `SOURCE` names who is in control and the
+heartbeat ring shows command age — it just no longer overwrites the one thing the
+big word is for. (`SYNC` was removed earlier for the same reason.)
+
 If a link reports connected but stops answering reads, the controller treats it
-as half open after about three seconds of silence and drops it so the scan task
-reconnects; without that a node could sit on `SYNC` indefinitely. While a node is
-missing the controller rescans every 250 ms instead of once per second.
+as half open after about three seconds of silence and drops it so the reconnect
+task can pick it up again.
 
 A circular heartbeat shows command age and uses the current state color without full-screen redraw. `SOURCE` identifies `BLE`, `LATCH` (local button holds the node), `LOCAL` (local release), `NOW`, or fail-safe `SAFE` control.
 
