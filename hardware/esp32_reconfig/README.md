@@ -78,6 +78,22 @@ of both nodes now restores itself in about 24 s and a single lost node in about
 28 s, where before either state was permanent until all three boards were reset
 by hand.
 
+Recovery is about 27 s from the node going quiet to both links back and the tablet
+relinked, measured over three soaks of three cycles each with a node reset every cycle:
+9/9 healed unattended, no failures.
+
+Two things had to be right for that to be *consistent* rather than just eventually true:
+
+* The boot grace period applies only until the nodes have been found once. As a plain
+  time-since-boot test it suppressed the watchdog for 45 s after every self-heal, so any
+  failure inside that window took ~50 s to recover instead of ~27. Two soaks showed the
+  same shape -- cycle 1 at ~27 s, every later cycle at ~50 s -- before this was scoped to
+  first discovery.
+* The learned node addresses live in RTC memory so they survive the self-heal reboot. This
+  was expected to be the cause of the ~50 s cases and measurably was **not**: timings did
+  not move. It is kept because reconnecting straight to a known address after a reboot is
+  still better than falling back to a scan, but the boot grace was the real cause.
+
 Reboots are capped at three (counted in RTC memory, so a power cycle clears it).
 Rebooting cannot fix a node that is switched off or unplugged, and a controller
 looping forever is worse than one sitting there degraded showing `P2 --`.
