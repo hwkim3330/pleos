@@ -1,7 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/fault_data.dart';
+import '../core/constants.dart';
 import '../services/fault_stream_service.dart';
-import 'native_vehicle_provider.dart';
+import 'viewer_service_provider.dart';
 import 'hardware_reconfig_provider.dart';
 import '../services/hardware_reconfig_service.dart';
 
@@ -53,7 +54,7 @@ class FaultNotifier extends StateNotifier<Map<int, FaultData>> {
 
   void clearAll({bool notifyHardware = true}) {
     state = {};
-    ref.read(nativeVehicleControllerProvider).clearAlerts();
+    ref.read(viewerServiceProvider).clearFaultAlerts();
     if (notifyHardware) {
       ref.read(hardwareReconfigServiceProvider).recover();
     }
@@ -107,21 +108,31 @@ class FaultNotifier extends StateNotifier<Map<int, FaultData>> {
     super.dispose();
   }
 
-  /// Pushes the whole alert set to the 3D rather than one target at a time.
-  ///
-  /// The WebView version added and removed targets individually, which meant the JS held
-  /// its own copy of what was alerting and could drift from `state`. Sending the derived
-  /// map keeps one source of truth: the host renders exactly what the provider holds.
+  /// Update 3D viewer alert for a specific target
+  /// Shows the highest severity if multiple faults exist for the same target
   void _updateViewerForTarget(String target) {
-    final alerts = <String, int>{};
-    for (final fault in state.values) {
-      if (fault.target.isEmpty) continue;
-      final existing = alerts[fault.target];
-      if (existing == null || fault.severity > existing) {
-        alerts[fault.target] = fault.severity;
+    final service = ref.read(viewerServiceProvider);
+
+    // Find all faults for this target
+    final targetFaults = state.values.where((f) => f.target == target).toList();
+
+    if (targetFaults.isEmpty) {
+      // No more faults for this target - hide alert
+      service.hideFaultAlert(target);
+      if (state.isEmpty) {
+        service.stopAlert();
+      }
+    } else {
+      // Show alert with highest severity
+      final maxSeverity = targetFaults
+          .map((f) => f.severity)
+          .reduce((a, b) => a > b ? a : b);
+
+      final config = errorHotspotConfigs[target];
+      if (config != null) {
+        service.showFaultAlert(target, maxSeverity, config);
       }
     }
-    ref.read(nativeVehicleControllerProvider).setAlerts(alerts);
   }
 
   /// Get all faults for a specific target

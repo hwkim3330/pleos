@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:model_viewer_plus/model_viewer_plus.dart';
+
+import '../core/js_scripts.dart';
 import '../models/fault_data.dart';
 import '../providers/fault_provider.dart';
 import '../providers/hardware_reconfig_provider.dart';
 import '../services/hardware_reconfig_service.dart';
-import 'widgets/native_vehicle_view.dart';
+import '../providers/viewer_service_provider.dart';
 
 class CarViewerScreen extends ConsumerStatefulWidget {
   const CarViewerScreen({super.key});
@@ -15,12 +18,11 @@ class CarViewerScreen extends ConsumerStatefulWidget {
 }
 
 class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
+  var _labelsVisible = false;
   var _lastAlertSequence = -1;
   var _metricsVisible = true;
   var _pathPanelVisible = false;
   var _shellOpacity = 0.15;
-  /// Bumped instead of calling the view directly, so a rebuild cannot lose the request.
-  var _cameraResetSignal = 0;
   _ScenarioDef _selectedScenario = _ScenarioDef.values.first;
 
   @override
@@ -31,6 +33,21 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
       if (!mounted) return;
       ref.read(hardwareReconfigServiceProvider).recover();
     });
+  }
+
+  Future<void> _waitForJsAndInitialize() async {
+    final service = ref.read(viewerServiceProvider);
+    for (var i = 0; i < 24; i++) {
+      await Future.delayed(const Duration(milliseconds: 180));
+      if (!mounted) return;
+      if (await service.isJsReady()) {
+        await service.initializeLabelHotspots();
+        await service.toggleHotspots(_labelsVisible);
+        return;
+      }
+    }
+    await service.initializeLabelHotspots();
+    await service.toggleHotspots(_labelsVisible);
   }
 
   Future<void> _applyScenario(_ScenarioDef scenario) async {
@@ -80,10 +97,13 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   void _recover() {
     ref.read(faultProvider.notifier).clearAll();
     ref.read(hardwareReconfigServiceProvider).recover();
-    setState(() {
-      _selectedScenario = _ScenarioDef.values.first;
-      _cameraResetSignal++;
-    });
+    ref.read(viewerServiceProvider).resetCameraOrbit();
+    setState(() => _selectedScenario = _ScenarioDef.values.first);
+  }
+
+  void _toggleLabels() {
+    setState(() => _labelsVisible = !_labelsVisible);
+    ref.read(viewerServiceProvider).toggleHotspots(_labelsVisible);
   }
 
   /// Raises a banner when a path node's lower button calls out which path it is.
@@ -130,10 +150,24 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
         fit: StackFit.expand,
         children: [
           const ColoredBox(color: Color(0xFFF2F4F7)),
-          NativeVehicleView(
-            channels: hardware.channels,
-            shellOpacity: _shellOpacity,
-            resetSignal: _cameraResetSignal,
+          ModelViewer(
+            backgroundColor: const Color(0xFFF2F4F7),
+            id: 'car',
+            src: 'lib/assets/roii_reconfig.glb',
+            alt: 'PLEOS reconfigurable E/E architecture vehicle',
+            interpolationDecay: 200,
+            disablePan: true,
+            disableTap: true,
+            disableZoom: false,
+            cameraControls: true,
+            autoRotate: false,
+            cameraOrbit: '45deg 65deg 100%',
+            cameraTarget: 'auto 8m auto',
+            relatedJs: modelViewerScript,
+            onWebViewCreated: (controller) {
+              ref.read(viewerServiceProvider).setController(controller);
+              _waitForJsAndInitialize();
+            },
           ),
           Positioned(
             left: 14,
@@ -180,16 +214,20 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
             right: 14,
             bottom: 14,
             child: _BottomConsole(
+              labelsVisible: _labelsVisible,
               metricsVisible: _metricsVisible,
               pathPanelVisible: _pathPanelVisible,
               shellOpacity: _shellOpacity,
               mode: mode,
+              onToggleLabels: _toggleLabels,
               onToggleMetrics: () =>
                   setState(() => _metricsVisible = !_metricsVisible),
               onTogglePathPanel: () =>
                   setState(() => _pathPanelVisible = !_pathPanelVisible),
-              onShellOpacityChanged: (value) =>
-                  setState(() => _shellOpacity = value),
+              onShellOpacityChanged: (value) {
+                setState(() => _shellOpacity = value);
+                ref.read(viewerServiceProvider).setVehicleShellOpacity(value);
+              },
               onRecover: _recover,
             ),
           ),
@@ -760,20 +798,24 @@ class _TimelinePanel extends StatelessWidget {
 
 class _BottomConsole extends StatelessWidget {
   const _BottomConsole({
+    required this.labelsVisible,
     required this.metricsVisible,
     required this.pathPanelVisible,
     required this.shellOpacity,
     required this.mode,
+    required this.onToggleLabels,
     required this.onToggleMetrics,
     required this.onTogglePathPanel,
     required this.onShellOpacityChanged,
     required this.onRecover,
   });
 
+  final bool labelsVisible;
   final bool metricsVisible;
   final bool pathPanelVisible;
   final double shellOpacity;
   final _ReconfigMode mode;
+  final VoidCallback onToggleLabels;
   final VoidCallback onToggleMetrics;
   final VoidCallback onTogglePathPanel;
   final ValueChanged<double> onShellOpacityChanged;
@@ -790,6 +832,12 @@ class _BottomConsole extends StatelessWidget {
           alignment: WrapAlignment.center,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
+            _ToolButton(
+              icon: Icons.label_rounded,
+              label: labelsVisible ? 'Hide Labels' : 'Show Labels',
+              active: labelsVisible,
+              onTap: onToggleLabels,
+            ),
             _ToolButton(
               icon: Icons.timeline_rounded,
               label: metricsVisible ? 'Hide Metrics' : 'Show Metrics',

@@ -75,12 +75,6 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // --- 0. Filament 차량 뷰 (WebView model-viewer 대체) ---
-        flutterEngine.platformViewsController.registry.registerViewFactory(
-            VehicleViewFactory.VIEW_TYPE,
-            VehicleViewFactory(flutterEngine.dartExecutor.binaryMessenger),
-        )
-
         // --- 1. 권한 요청을 위한 MethodChannel ---
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PERMISSION_CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "requestCarSpeedPermission") {
