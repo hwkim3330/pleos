@@ -71,6 +71,7 @@ flutter:
 
   assets:
     - lib/assets/roii_reconfig.glb
+    - lib/assets/keti_logo.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

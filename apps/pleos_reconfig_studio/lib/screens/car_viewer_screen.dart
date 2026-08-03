@@ -25,6 +25,56 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   var _shellOpacity = 0.15;
   _ScenarioDef _selectedScenario = _ScenarioDef.values.first;
 
+  /// Real measurements, replacing three hardcoded strings that looked like readings.
+  ///
+  /// `switchTime: '34ms'` and its neighbours were constants in the scenario table --
+  /// nothing was ever timed. On a validation console that is the worst kind of UI: it
+  /// survives being asked "what did you measure to get 34 ms?" only until someone asks.
+  /// These two are timed off the controller's own state stream, the same evidence the soak
+  /// script uses.
+  DateTime? _commandSentAt;
+  Map<String, String> _commandIntent = const {};
+  Duration? _lastCommandRoundTrip;
+  DateTime? _nodeLostAt;
+  Duration? _lastHeal;
+
+  /// Starts the clock for the next relay confirmation. `intent` is the channel state the
+  /// action is expected to produce; the clock stops when the controller reports it.
+  void _armCommandTimer(Map<String, String> intent) {
+    _commandSentAt = DateTime.now();
+    _commandIntent = intent;
+  }
+
+  /// Called on every hardware snapshot. Times the two things worth timing, nothing else.
+  void _observe(HardwareReconfigState hardware) {
+    if (!hardware.connected) return;
+
+    final sentAt = _commandSentAt;
+    if (sentAt != null && _commandIntent.isNotEmpty) {
+      final satisfied = _commandIntent.entries.every(
+        (entry) => hardware.channels[entry.key] == entry.value,
+      );
+      if (satisfied) {
+        _lastCommandRoundTrip = DateTime.now().difference(sentAt);
+        _commandSentAt = null;
+        _commandIntent = const {};
+      }
+    }
+
+    // A node dropping and coming back is the self-heal. Timed end to end here rather than
+    // quoting a number from the firmware's point of view.
+    final nodes = hardware.pathNodes;
+    if (nodes.isNotEmpty) {
+      final anyLost = nodes.values.any((online) => !online);
+      if (anyLost && _nodeLostAt == null) {
+        _nodeLostAt = DateTime.now();
+      } else if (!anyLost && _nodeLostAt != null) {
+        _lastHeal = DateTime.now().difference(_nodeLostAt!);
+        _nodeLostAt = null;
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -50,8 +100,21 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
     await service.toggleHotspots(_labelsVisible);
   }
 
+  /// The channel state a scenario is expected to leave behind, used to time the relay
+  /// confirmation. Scenarios that fan out over time (the sequence) are not timed.
+  static const _scenarioIntent = <String, Map<String, String>>{
+    'normal': {'tsn_front_a': 'NORMAL', 'tsn_front_b': 'NORMAL', 'tsn_rear': 'NORMAL'},
+    'path1': {'tsn_front_a': 'FAULT'},
+    'path2': {'tsn_front_b': 'FAULT'},
+    'path3': {'tsn_rear': 'FAULT'},
+    'dualFront': {'tsn_front_a': 'FAULT', 'tsn_front_b': 'FAULT'},
+    'allPaths': {'tsn_front_a': 'FAULT', 'tsn_front_b': 'FAULT', 'tsn_rear': 'FAULT'},
+  };
+
   Future<void> _applyScenario(_ScenarioDef scenario) async {
     setState(() => _selectedScenario = scenario);
+    final intent = _scenarioIntent[scenario.id];
+    if (intent != null) _armCommandTimer(intent);
     ref.read(faultProvider.notifier).applyScenario(scenario.id);
     final hardware = ref.read(hardwareReconfigServiceProvider);
     if (scenario.id == 'normal' || scenario.id == 'recoveryAudit') {
@@ -138,6 +201,7 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
     final hardware =
         ref.watch(hardwareReconfigProvider).valueOrNull ??
         const HardwareReconfigState();
+    _observe(hardware);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _showPathAlert(hardware),
     );
@@ -236,7 +300,12 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               left: 248,
               right: 348,
               bottom: 72,
-              child: _TimelinePanel(scenario: _selectedScenario, mode: mode),
+              child: _TimelinePanel(
+                scenario: _selectedScenario,
+                mode: mode,
+                commandRoundTrip: _lastCommandRoundTrip,
+                lastHeal: _lastHeal,
+              ),
             ),
         ],
       ),
@@ -263,12 +332,10 @@ class _TopBar extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            const Icon(
-              Icons.account_tree_rounded,
-              color: Color(0xFF4EA1FF),
-              size: 20,
-            ),
-            const SizedBox(width: 8),
+            // The institute's own mark, not a stand-in glyph. Same source file as the
+            // launcher icon and the 7-inch header, so one logo drives all three.
+            Image.asset('lib/assets/keti_logo.png', height: 22),
+            const SizedBox(width: 12),
             const Text(
               'PLEOS Reconfig Studio',
               style: TextStyle(
@@ -322,20 +389,6 @@ class _TopBar extends StatelessWidget {
               value: scenario.title,
               color: scenario.color,
             ),
-            const SizedBox(width: 8),
-            _StatusPill(label: 'Autoware', value: mode.name, color: mode.color),
-            const SizedBox(width: 8),
-            _StatusPill(
-              label: 'Safety goal',
-              value: scenario.safetyGoal,
-              color: mode.color,
-            ),
-            const SizedBox(width: 8),
-            const _StatusPill(
-              label: 'Network',
-              value: 'TSN/FRER',
-              color: Color(0xFF4EA1FF),
-            ),
           ],
         ),
       ),
@@ -365,20 +418,14 @@ class _ScenarioRail extends StatelessWidget {
               color: Color(0xFF172033),
             ),
           ),
-          const SizedBox(height: 4),
-          const Text(
-            'Inject  ·  Isolate  ·  Reconfigure  ·  Recover',
-            style: TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF64748B),
-            ),
-          ),
-          const SizedBox(height: 10),
+          // The subtitle used to restate Inject/Isolate/Reconfigure/Recover here, which is
+          // the app's whole purpose and needs no caption. Its two lines cost exactly the
+          // room the tenth scenario needed to be on screen at all.
+          const SizedBox(height: 8),
           Expanded(
             child: ListView.separated(
               itemCount: _ScenarioDef.values.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 7),
+              separatorBuilder: (_, __) => const SizedBox(height: 5),
               itemBuilder: (context, index) {
                 final scenario = _ScenarioDef.values[index];
                 final active = scenario == selected;
@@ -391,7 +438,12 @@ class _ScenarioRail extends StatelessWidget {
                     onTap: () => onSelected(scenario),
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
-                      padding: const EdgeInsets.all(9),
+                      // Tight on purpose: nine scenarios have to fit the tablet's
+                      // column without scrolling, or the last two are invisible in a demo.
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 7,
+                      ),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
@@ -734,60 +786,53 @@ class _PathPair extends StatelessWidget {
 }
 
 class _TimelinePanel extends StatelessWidget {
-  const _TimelinePanel({required this.scenario, required this.mode});
+  const _TimelinePanel({
+    required this.scenario,
+    required this.mode,
+    required this.commandRoundTrip,
+    required this.lastHeal,
+  });
 
   final _ScenarioDef scenario;
   final _ReconfigMode mode;
+  final Duration? commandRoundTrip;
+  final Duration? lastHeal;
 
   @override
   Widget build(BuildContext context) {
-    final steps = scenario.id == 'triple'
-        ? ['Normal', 'Monitor', 'Validate']
-        : [
-            'Inject',
-            'Detect',
-            'Reconfig',
-            'Switch',
-            'Validate',
-            mode.isMrm ? 'MRM' : 'Recover',
-          ];
+    // Two timed values and a plain statement of what the rig is doing. What used to be here
+    // -- a six-step Inject..Recover chain with `active: true` hardcoded on every step, and
+    // three metric chips reading from constants in the scenario table -- showed the same
+    // thing whatever the hardware was doing.
+    final roundTrip = commandRoundTrip;
+    final heal = lastHeal;
     return _Glass(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            for (var i = 0; i < steps.length; i++) ...[
-              _TimelineStep(
-                label: steps[i],
-                active: true,
-                color: i >= 2 ? mode.color : scenario.color,
+            Text(
+              scenario.modeName,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: mode.color,
               ),
-              if (i != steps.length - 1)
-                Container(
-                  width: 22,
-                  height: 2,
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  color: const Color(0xFF344054),
-                ),
-            ],
+            ),
             const SizedBox(width: 14),
             _MetricChip(
-              label: 'switch',
-              value: scenario.switchTime,
+              label: 'command → relay',
+              value: roundTrip == null
+                  ? '--'
+                  : '${roundTrip.inMilliseconds} ms',
               color: mode.color,
             ),
             const SizedBox(width: 6),
             _MetricChip(
-              label: 'latency',
-              value: scenario.latency,
-              color: mode.color,
-            ),
-            const SizedBox(width: 6),
-            _MetricChip(
-              label: 'jitter',
-              value: scenario.jitter,
-              color: mode.color,
+              label: 'last self-heal',
+              value: heal == null ? 'none' : '${heal.inSeconds} s',
+              color: const Color(0xFF0F766E),
             ),
           ],
         ),
@@ -1015,45 +1060,6 @@ class _ModeLine extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _TimelineStep extends StatelessWidget {
-  const _TimelineStep({
-    required this.label,
-    required this.active,
-    required this.color,
-  });
-
-  final String label;
-  final bool active;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 18,
-          height: 18,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: active ? color : const Color(0xFFD0D5DD),
-          ),
-          child: const Icon(Icons.check_rounded, color: Colors.white, size: 13),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 9.5,
-            fontWeight: FontWeight.w900,
-            color: Color(0xFF667085),
-          ),
-        ),
-      ],
     );
   }
 }
