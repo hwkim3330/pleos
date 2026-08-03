@@ -10,6 +10,12 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    // The glb is already packed; letting aapt deflate it again only costs inflate time
+    // when the renderer reads it.
+    androidResources {
+        noCompress += "glb"
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -45,6 +51,14 @@ android {
 }
 
 dependencies {
+    // Filament renders the vehicle in-process, replacing the WebView that hosted
+    // model-viewer. Measured on the tablet: 521 MB PSS plus a separate 183 MB Chromium
+    // process and a 150 ms 90th-percentile frame, against 231 MB and 25 ms.
+    val filament = "1.74.0"
+    implementation("com.google.android.filament:filament-android:$filament")
+    implementation("com.google.android.filament:gltfio-android:$filament")
+    implementation("com.google.android.filament:filament-utils-android:$filament")
+
     implementation("ai.pleos.playground:Vehicle:2.0.3")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.16.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0")
