@@ -260,6 +260,7 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               scenario: _selectedScenario,
               mode: mode,
               faults: faults,
+              hardware: hardware,
             ),
           ),
           if (_pathPanelVisible)
@@ -503,11 +504,49 @@ class _EvidencePanel extends StatelessWidget {
     required this.scenario,
     required this.mode,
     required this.faults,
+    required this.hardware,
   });
 
   final _ScenarioDef scenario;
   final _ReconfigMode mode;
   final List<FaultData> faults;
+  final HardwareReconfigState hardware;
+
+  static const _linkNames = {
+    'tsn_front_a': 'Path 1 (F-A to R)',
+    'tsn_front_b': 'Path 2 (F-B to R)',
+    'tsn_rear': 'Path 3 (F-A to F-B)',
+  };
+
+  /// Reads the three links out of the controller's own snapshot.
+  ///
+  /// This block used to print `scenario.metrics`, a fixed list of strings per scenario --
+  /// so it said "Path 1 feedback FAULT" because Path 1 had been *selected*, not because
+  /// the controller had reported anything. It happened to agree with the hardware most of
+  /// the time, which is exactly what makes that kind of line dangerous on a validation
+  /// panel: it agrees right up until the moment the answer matters.
+  List<String> get _liveMetrics {
+    if (!hardware.connected) {
+      return const ['No gateway link -- nothing measured'];
+    }
+    final lines = <String>[];
+    for (final entry in _linkNames.entries) {
+      final health = hardware.channels[entry.key] ?? 'UNKNOWN';
+      lines.add('${entry.value}: $health');
+    }
+    // Path 3 is the 7-inch board's own GPIO, so only two nodes can ACK. Saying so is
+    // better than printing two reports for three paths and letting the reader assume.
+    final p1 = hardware.pathNodes['PLEOS-PATH1'];
+    final p2 = hardware.pathNodes['PLEOS-PATH2'];
+    if (p1 != null || p2 != null) {
+      lines.add(
+        'Node feedback: P1 ${p1 == true ? 'ACK' : 'lost'}, '
+        'P2 ${p2 == true ? 'ACK' : 'lost'}, P3 local GPIO',
+      );
+    }
+    lines.add('Gateway snapshot #${hardware.sequence}');
+    return lines;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -538,7 +577,7 @@ class _EvidencePanel extends StatelessWidget {
               'MRM: ${scenario.mrmPolicy}',
             ],
           ),
-          _EvidenceBlock(title: 'Validation metrics', lines: scenario.metrics),
+          _EvidenceBlock(title: 'Measured now', lines: _liveMetrics),
           _EvidenceBlock(
             title: 'Report mapping',
             lines: scenario.reportMapping,
@@ -1271,7 +1310,6 @@ class _ScenarioDef {
     required this.fusion,
     required this.safetyGoal,
     required this.mrmPolicy,
-    required this.metrics,
     required this.reportMapping,
     required this.switchTime,
     required this.latency,
@@ -1290,7 +1328,6 @@ class _ScenarioDef {
   final String fusion;
   final String safetyGoal;
   final String mrmPolicy;
-  final List<String> metrics;
   final List<String> reportMapping;
   final String switchTime;
   final String latency;
@@ -1310,7 +1347,6 @@ class _ScenarioDef {
       fusion: 'Path A + Path B + Rear',
       safetyGoal: 'Full network availability',
       mrmPolicy: 'standby',
-      metrics: ['Three links normal', 'BLE GPIO ACK active', 'Recovery armed'],
       reportMapping: ['3개 스위치 정상 경로 기준', 'NC pass-through 상태 검증'],
       switchTime: '0ms',
       latency: '1ms',
@@ -1331,11 +1367,6 @@ class _ScenarioDef {
       fusion: 'Path 2 + Path 3 active',
       safetyGoal: 'Single-path fail-operational',
       mrmPolicy: 'standby',
-      metrics: [
-        'Path 1 feedback FAULT',
-        'Path 2 remains NORMAL',
-        'Path 3 remains NORMAL',
-      ],
       reportMapping: ['FRER Path 1 단독 고장 주입', '링크 검출 및 우회 검증'],
       switchTime: '34ms',
       latency: '1ms',
@@ -1356,11 +1387,6 @@ class _ScenarioDef {
       fusion: 'Path 1 + Path 3 active',
       safetyGoal: 'Single-path fail-operational',
       mrmPolicy: 'standby',
-      metrics: [
-        'Path 2 feedback FAULT',
-        'Path 1 remains NORMAL',
-        'Path 3 remains NORMAL',
-      ],
       reportMapping: ['FRER Path 2 단독 고장 주입', '링크 검출 및 우회 검증'],
       switchTime: '35ms',
       latency: '1ms',
@@ -1381,11 +1407,6 @@ class _ScenarioDef {
       fusion: 'Path 1 + Path 2 active',
       safetyGoal: 'Cross-path isolation',
       mrmPolicy: 'standby',
-      metrics: [
-        'Path 3 feedback FAULT',
-        'Path 1 remains NORMAL',
-        'Path 2 remains NORMAL',
-      ],
       reportMapping: ['7인치 ESP Path 3 단독 고장 주입', '후방 우회 경로 유지 검증'],
       switchTime: '37ms',
       latency: '1ms',
@@ -1404,7 +1425,6 @@ class _ScenarioDef {
       fusion: 'Front B ↔ Rear retained',
       safetyGoal: 'Switch fault containment',
       mrmPolicy: 'candidate',
-      metrics: ['Front A fault confirmed', 'Front B NORMAL', 'Rear NORMAL'],
       reportMapping: ['전방 A 스위치 단독 고장', '스위치 격리 및 우회 검증'],
       switchTime: 'measured',
       latency: 'measured',
@@ -1423,7 +1443,6 @@ class _ScenarioDef {
       fusion: 'Front A ↔ Rear retained',
       safetyGoal: 'Switch fault containment',
       mrmPolicy: 'candidate',
-      metrics: ['Front B fault confirmed', 'Front A NORMAL', 'Rear NORMAL'],
       reportMapping: ['전방 B 스위치 단독 고장', '스위치 격리 및 우회 검증'],
       switchTime: 'measured',
       latency: 'measured',
@@ -1442,7 +1461,6 @@ class _ScenarioDef {
       fusion: 'Path 3 retained',
       safetyGoal: 'Switch fault containment',
       mrmPolicy: 'candidate',
-      metrics: ['Rear fault confirmed', 'Front A NORMAL', 'Front B NORMAL'],
       reportMapping: ['후방 스위치 단독 고장', 'Path 3 유지 및 MRM 조건 검증'],
       switchTime: 'measured',
       latency: 'measured',
@@ -1462,11 +1480,6 @@ class _ScenarioDef {
       fusion: 'P1 → recover → P2 → recover → P3 → recover',
       safetyGoal: 'Repeatable validation',
       mrmPolicy: 'not required',
-      metrics: [
-        'Three commands acknowledged',
-        'No stale fault remains',
-        'Final NC recovery',
-      ],
       reportMapping: ['3개 경로 자동 시험 순서', '주입·검출·격리·복구 증적'],
       switchTime: 'Auto',
       latency: 'measured',
@@ -1485,7 +1498,6 @@ class _ScenarioDef {
       fusion: 'Path 3 only',
       safetyGoal: 'Degraded connectivity',
       mrmPolicy: 'candidate',
-      metrics: ['Paths 1/2 FAULT', 'Path 3 NORMAL', 'Fallback route retained'],
       reportMapping: ['이중 링크 고장 조합', '단일 잔여 경로 운용 검증'],
       switchTime: '72ms',
       latency: 'measured',
@@ -1504,11 +1516,6 @@ class _ScenarioDef {
       fusion: 'No network path',
       safetyGoal: 'Minimal risk condition',
       mrmPolicy: 'active',
-      metrics: [
-        'Three paths FAULT',
-        'MRM state confirmed',
-        'Recover all required',
-      ],
       reportMapping: ['전체 네트워크 단절 고장', 'MRM 진입 및 복구 검증'],
       switchTime: 'MRM',
       latency: 'measured',
@@ -1532,11 +1539,6 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.4 / GNSS 0.3 / Camera 0.3',
       safetyGoal: 'Full DDT',
       mrmPolicy: 'standby',
-      metrics: [
-        'Localization confidence normal',
-        'No topology degradation',
-        'Recovery validation armed',
-      ],
       reportMapping: ['인지범위별 삼중 센서 측위 모드', 'Lv.4 플랫폼 정상 주행 기준'],
       switchTime: '0ms',
       latency: '1ms',
@@ -1555,11 +1557,6 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.6 / GNSS 0.0 / Camera 0.4',
       safetyGoal: 'No position jump',
       mrmPolicy: 'standby',
-      metrics: [
-        'Mode switch time measured',
-        'Localization discontinuity check',
-        'Odometer cross-check passed',
-      ],
       reportMapping: ['GNSS 오류 판정: 오도미터 이동거리 불일치', '이중 센서에서 단일/대체 측위 전환 영향 분석'],
       switchTime: '82ms',
       latency: '1ms',
@@ -1578,11 +1575,6 @@ class _ScenarioDef {
       fusion: 'LiDAR side pair 0.5 / GNSS 0.2 / Camera 0.3',
       safetyGoal: 'Maintain DDT degraded',
       mrmPolicy: 'standby',
-      metrics: [
-        'Point-cloud confidence down',
-        'Speed cap validated',
-        'No center-lane discontinuity',
-      ],
       reportMapping: ['4개 라이다 기반 Lv.4 차량 플랫폼', '센서 고장 시 다른 센서 데이터로 시스템 조정'],
       switchTime: '96ms',
       latency: '1ms',
@@ -1601,11 +1593,6 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.7 / GNSS 0.3 / Camera 0.0',
       safetyGoal: 'Lane-safe degraded',
       mrmPolicy: 'standby',
-      metrics: [
-        'Lane feature unavailable',
-        'NDT localization stable',
-        'Speed cap 45km/h',
-      ],
       reportMapping: ['이중 센서 주행 모드', 'Autoware 측위/탐지/계획/제어 pipeline'],
       switchTime: '74ms',
       latency: '1ms',
@@ -1624,11 +1611,6 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.0 / GNSS 1.0 / Camera 0.0',
       safetyGoal: 'Minimal risk ready',
       mrmPolicy: 'candidate',
-      metrics: [
-        'Control authority reduced',
-        'No lane change',
-        'MRM trigger monitored',
-      ],
       reportMapping: ['단일 센서 주행 모드', '복구 불가능 결함 발생 시 단계적 저하'],
       switchTime: '118ms',
       latency: '1.4ms',
@@ -1647,11 +1629,6 @@ class _ScenarioDef {
       fusion: 'Sensor fusion held until time base validated',
       safetyGoal: 'Bounded latency',
       mrmPolicy: 'standby',
-      metrics: [
-        'PTP failover check',
-        'FRER path continuity',
-        'DetNet jitter threshold',
-      ],
       reportMapping: ['TSN FRER 및 DetNet 지연시간 편차 보장', 'Zonal Gateway 오류검지 기능'],
       switchTime: '64ms',
       latency: '1ms',
@@ -1670,11 +1647,6 @@ class _ScenarioDef {
       fusion: 'Fusion unchanged, network path reweighted',
       safetyGoal: 'No packet loss impact',
       mrmPolicy: 'standby',
-      metrics: [
-        'Hitless switchover',
-        'Latency max under limit',
-        'No Autoware mode drop',
-      ],
       reportMapping: [
         'Frame Replication and Elimination for Reliability',
         'Automotive Ethernet 기반 통합 네트워크',
@@ -1696,11 +1668,6 @@ class _ScenarioDef {
       fusion: 'Front sensors down-weighted, rear/side context held',
       safetyGoal: 'Fail-operational',
       mrmPolicy: 'standby/candidate',
-      metrics: [
-        'Gateway isolation detected',
-        'Backup route active',
-        'Safety goal check',
-      ],
       reportMapping: ['Zonal 아키텍처 적용 요구사항', '데이터 수집 및 고장 진단/대응 구조'],
       switchTime: '126ms',
       latency: '1.6ms',
@@ -1719,11 +1686,6 @@ class _ScenarioDef {
       fusion: 'Fusion unchanged, compute resource reallocated',
       safetyGoal: 'Bounded callback',
       mrmPolicy: 'standby',
-      metrics: [
-        'Callback period checked',
-        'Resource schedule applied',
-        'Mode transition not required',
-      ],
       reportMapping: ['Autoware pipeline 성능 영향 분석', '자원 스케줄링 기술 개발'],
       switchTime: '48ms',
       latency: '1.2ms',
@@ -1742,11 +1704,6 @@ class _ScenarioDef {
       fusion: 'LiDAR 0.2 / GNSS 0.5 / Camera 0.3',
       safetyGoal: 'Controlled degradation',
       mrmPolicy: 'candidate',
-      metrics: [
-        'Perception confidence threshold',
-        'Planning route confidence',
-        'Speed cap 25km/h',
-      ],
       reportMapping: ['SOTIF 관점 원인 시나리오', '복합 결함 기반 시뮬레이터 검증'],
       switchTime: '142ms',
       latency: '1.8ms',
@@ -1765,7 +1722,6 @@ class _ScenarioDef {
       fusion: 'Fusion disabled after stop target fixed',
       safetyGoal: 'Minimal risk condition',
       mrmPolicy: 'active',
-      metrics: ['Stop trajectory active', 'Hazard signal', 'Remote telemetry'],
       reportMapping: ['결함/오류 시나리오 기반 실차 검증', '안전성 향상 기능 재구성'],
       switchTime: '210ms',
       latency: '2ms',
