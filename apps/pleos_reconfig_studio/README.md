@@ -37,6 +37,28 @@ Rendering is on demand: a frame is drawn when the link state, the shell slider o
 changes something. An unconditional per-frame Choreographer callback held a core at ~55%
 on a scene that is static most of the time.
 
+### Making it look like the WebView did
+
+model-viewer ships a neutral environment map and lights the model with it. Filament with
+only directional lights has no ambient term at all, and 82 of this asset's 110 materials
+are metallic 0.5 -- a metal has no diffuse response, so half their albedo simply
+disappears and everything reads dark and flat. That, not the renderer, was why the WebView
+looked better. Three things closed the gap:
+
+* an `IndirectLight` with band-0 (uniform) radiance, which puts the ambient term back
+* 4x MSAA and screen-space ambient occlusion, for the edges and the contact shading that
+  model-viewer got from its drop shadow
+* the body shell dropped from metallic 1.0 to 0.15 in the asset, because a full metal with
+  no reflections cubemap can only ever be flat grey -- and a translucent shell has no
+  reason to read as polished metal
+
+Only band 0 is used for the ambient: higher bands would add a sky-to-floor gradient, but
+SH sign conventions differ between references and getting band 1 wrong lights the vehicle
+from underneath. A real prefiltered IBL would be better still, and needs a `cmgen`-built
+`.ktx` -- `IBLPrefilter` is not in this version of filament-utils, and hand-building a
+cubemap through the 3D-region upload path was rejected by Filament's size validation even
+with a correctly sized buffer.
+
 `tools/build_native_vehicle_asset.py` prepares the asset. The Flutter copy is glTF JSON
 with its buffer and images inlined as base64, so it is repacked as a real binary glb (3.67
 -> 2.78 MB) into the Android assets, and the body material is switched to `alphaMode
