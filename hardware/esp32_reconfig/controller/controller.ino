@@ -1348,19 +1348,19 @@ void createUi() {
   lv_obj_set_style_bg_color(screen, lv_color_hex(0x0B0F11), 0);
   lv_obj_set_style_text_color(screen, lv_color_hex(0xF4F7F7), 0);
 
-  // The real KETI mark, not the word typed in a UI font. It comes with the white plate
-  // baked in: the logo's dark blue is close to invisible against this 0x0B0F11
-  // background, and recolouring someone's logo to suit a dark theme is not an option.
-  // Regenerate with tools/build_keti_branding.py after any logo change.
+  // The real KETI mark, not the word typed in a UI font, as a solid white knockout. The
+  // logo's own dark blue is close to invisible against this 0x0B0F11 background, and a
+  // monochrome knockout is a normal treatment on a dark ground -- recolouring it to some
+  // other hue would not be. Regenerate with tools/build_keti_branding.py.
   auto *keti = lv_img_create(screen);
   lv_img_set_src(keti, &keti_logo);
-  lv_obj_set_pos(keti, 18, 8);
+  lv_obj_set_pos(keti, 18, 14);
   auto *title = lv_label_create(screen);
   lv_label_set_text(title, "PLEOS RECONFIG");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
-  // Clear of the plate's right edge, and vertically centred on it rather than sharing the
-  // old shared baseline, which no longer exists now that the mark is an image.
-  lv_obj_set_pos(title, 113, 19);
+  // Clear of the mark's right edge and centred on it, rather than sharing the baseline the
+  // two labels used to share, which no longer exists now that the mark is an image.
+  lv_obj_set_pos(title, 103, 19);
   modeLabel = lv_label_create(screen);
   lv_obj_set_style_text_font(modeLabel, &lv_font_montserrat_16, 0);
   lv_obj_align(modeLabel, LV_ALIGN_TOP_RIGHT, -18, 19);
