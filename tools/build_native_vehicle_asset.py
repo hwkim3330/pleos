@@ -106,14 +106,6 @@ def main() -> None:
         factor = pbr.get("baseColorFactor") or [1.0, 1.0, 1.0, 1.0]
         # Start opaque; the app drives the alpha from the shell slider.
         pbr["baseColorFactor"] = [factor[0], factor[1], factor[2], 1.0]
-        # The shell ships as metallic 1.0, which is why it renders as flat grey natively: a
-        # metal has no diffuse response, so with no environment map to reflect there is
-        # nothing left. model-viewer hides this by shipping an environment; Filament here has
-        # a uniform ambient and no reflections cubemap. Making the shell mostly dielectric
-        # gives it back a diffuse term, and a translucent body has no reason to read as
-        # polished metal anyway.
-        pbr["metallicFactor"] = 0.15
-        pbr["roughnessFactor"] = 0.45
         patched = True
     if not patched:
         sys.exit(f"material {BODY_MATERIAL!r} not found; the asset layout changed")

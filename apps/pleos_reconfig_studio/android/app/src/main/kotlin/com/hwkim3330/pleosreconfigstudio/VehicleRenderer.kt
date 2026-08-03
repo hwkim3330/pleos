@@ -6,11 +6,9 @@ import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.TextureView
 import com.google.android.filament.EntityManager
-import com.google.android.filament.IndirectLight
 import com.google.android.filament.LightManager
 import com.google.android.filament.MaterialInstance
 import com.google.android.filament.Skybox
-import com.google.android.filament.View
 import com.google.android.filament.utils.ModelViewer
 import com.google.android.filament.utils.Utils
 import org.json.JSONObject
@@ -166,7 +164,6 @@ class VehicleRenderer(context: Context, textureView: TextureView) {
             .build(modelViewer.engine)
         modelViewer.cameraFocalLength = 40.0f
 
-        addAmbient()
         addLights()
         val bytes = context.assets.open(ASSET).use { it.readBytes() }
         readBaseColours(bytes)
@@ -175,45 +172,6 @@ class VehicleRenderer(context: Context, textureView: TextureView) {
         pendingChannels?.let { applyChannels(it) }
         pendingShell?.let { setShellOpacity(it) }
         invalidate()
-    }
-
-    /**
-     * The studio look, which is the whole reason the WebView render looked better.
-     *
-     * model-viewer ships a neutral environment map and uses it for image-based lighting.
-     * Filament with only directional lights has no ambient term at all, and 82 of this
-     * asset's 110 materials are metallic 0.5 -- a metal has no diffuse response, so half
-     * their albedo simply disappears and everything reads dark and flat. An indirect light
-     * puts that back.
-     *
-     * Band 0 only, so the ambient is uniform. Higher bands would give it a sky-to-floor
-     * gradient, but the sign conventions for band 1 differ between SH references and
-     * getting them wrong lights the vehicle from underneath -- not worth the risk for a
-     * subtlety on top of two directional lights.
-     */
-    private fun addAmbient() {
-        val ambient = IndirectLight.Builder()
-            .radiance(1, floatArrayOf(0.92f, 0.94f, 0.98f))
-            .intensity(38_000.0f)
-            .build(modelViewer.engine)
-        modelViewer.scene.indirectLight = ambient
-
-        val view = modelViewer.view
-        // Jagged edges were the other half of the difference: three.js renders with MSAA,
-        // and Filament's default is FXAA alone.
-        view.antiAliasing = View.AntiAliasing.FXAA
-        view.multiSampleAntiAliasingOptions = View.MultiSampleAntiAliasingOptions().apply {
-            enabled = true
-            sampleCount = 4
-        }
-        // Ambient occlusion does the job the model-viewer contact shadow did: it darkens
-        // where parts meet, which is what makes the components look seated in the vehicle
-        // rather than floating in it.
-        view.ambientOcclusionOptions = View.AmbientOcclusionOptions().apply {
-            enabled = true
-            intensity = 0.9f
-            radius = 0.06f
-        }
     }
 
     private fun addLights() {
