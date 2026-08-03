@@ -106,6 +106,18 @@ cd pleos
 - `hardware/esp32_reconfig`의 Supervisor, Inline Injector, I/O Node 펌웨어와 fail-safe 배선 계약
 - 전원만 연결된 상태로 동작하며 호스트 의존이 없음
 
+## KETI 아이콘 / 스플래시
+
+앱 5개의 런처 아이콘과 시작 화면은 `tools/assets/keti_logo.png` 하나에서 생성합니다.
+
+```bash
+python3 tools/build_keti_branding.py
+```
+
+로고 상단 좌측의 `KETI` 심볼만 잘라 아이콘으로 쓰고(가로 2:1이라 워드마크 전체는 정사각형에서 읽히지 않습니다), 시작 화면에는 워드마크 전체를 씁니다. legacy mipmap, adaptive icon(v26), 시스템 스플래시(v31)를 모두 생성하며 idempotent합니다.
+
+**Android 12 이상에서는 `launch_background`가 무시됩니다.** 시스템 SplashScreen이 대신 동작하므로 `values-v31/styles.xml`에 `windowSplashScreenBackground`와 `windowSplashScreenAnimatedIcon`을 지정해야 하고, 지정하지 않으면 시작 화면이 흰 화면으로만 뜹니다. 스크립트가 두 경로를 다 만듭니다.
+
 ## 빠른 실행
 
 ### 1. PLEOS 에뮬레이터 시작
@@ -581,6 +593,7 @@ adb -s emulator-5554 reboot
 - [ESP32 재구성 하드웨어](hardware/esp32_reconfig/README.md)
 - [고장 주입 모듈 배선](hardware/esp32_reconfig/FAULT_INJECTION_WIRING.md)
 - [Reconfig app plan](docs/pleos_reconfig_app_plan.md)
+- [PLEOS Reconfig HMI README](apps/pleos_reconfig_hmi/README.md)
 - [BLE 전자잉크 ESL 계획](docs/esl_eink_plan.md)
 - [Multimode CBOR testing](apps/pleos_multimode/cbor_testing.md)
 - [Reconfig CBOR testing](apps/pleos_reconfig_console/cbor_testing.md)
