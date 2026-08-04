@@ -375,15 +375,16 @@ class _TopBar extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             _StatusPill(
+              // Two nodes, because there are only two. Path 3's relay is driven from the
+              // 7-inch's own GPIO, so it has no node to answer for it -- and cramming it in
+              // here as `P3 LOCAL OK` mashed a control source and a state into one token
+              // that read like neither. Path 3's health is in the evidence panel with the
+              // other two links, where it belongs.
               label: 'Path nodes',
-              // Path 3 is the 7-inch board's own GPIO6, so it has no node ACK.
-              // Report it as LOCAL rather than leaving it out, otherwise three
-              // paths appear to be covered by two reports.
-              value: hardware.connected && hardware.pathNodes.isEmpty
-                  ? 'P1/P2 via 7-inch · P3 LOCAL'
-                  : 'P1 ${hardware.pathNodes['PLEOS-PATH1'] == true ? 'ACK' : '--'}  ·  '
-                        'P2 ${hardware.pathNodes['PLEOS-PATH2'] == true ? 'ACK' : '--'}  ·  '
-                        'P3 LOCAL ${(hardware.channels['tsn_rear'] ?? 'NORMAL') == 'NORMAL' ? 'OK' : 'FAULT'}',
+              value:
+                  'P1 ${hardware.pathNodes['PLEOS-PATH1'] == true ? 'ACK' : '--'}'
+                  '  ·  '
+                  'P2 ${hardware.pathNodes['PLEOS-PATH2'] == true ? 'ACK' : '--'}',
               color: hardware.connected && hardware.pathNodes.isEmpty
                   ? const Color(0xFF0F766E)
                   : hardware.pathNodes.values
@@ -550,7 +551,8 @@ class _EvidencePanel extends StatelessWidget {
     if (p1 != null || p2 != null) {
       lines.add(
         'Node feedback: P1 ${p1 == true ? 'ACK' : 'lost'}, '
-        'P2 ${p2 == true ? 'ACK' : 'lost'}, P3 local GPIO',
+        'P2 ${p2 == true ? 'ACK' : 'lost'} '
+        '(Path 3 runs off the gateway, no node)',
       );
     }
     lines.add('Gateway snapshot #${hardware.sequence}');
@@ -930,34 +932,49 @@ class _BottomConsole extends StatelessWidget {
           alignment: WrapAlignment.center,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            _ToolButton(
-              icon: Icons.label_rounded,
-              label: labelsVisible ? 'Hide Labels' : 'Show Labels',
-              active: labelsVisible,
-              onTap: onToggleLabels,
-            ),
-            _ToolButton(
-              icon: Icons.timeline_rounded,
-              label: metricsVisible ? 'Hide Metrics' : 'Show Metrics',
-              active: metricsVisible,
-              onTap: onToggleMetrics,
-            ),
-            _ToolButton(
-              icon: Icons.hub_rounded,
-              label: pathPanelVisible ? 'Hide Path Panel' : 'Show Path Panel',
-              active: pathPanelVisible,
-              onTap: onTogglePathPanel,
-            ),
-            _ToolButton(
-              icon: Icons.fact_check_rounded,
-              label: evidenceVisible ? 'Hide Evidence' : 'Show Evidence',
-              active: evidenceVisible,
-              onTap: onToggleEvidence,
+            // One segmented group for the four layer toggles, then the shell slider, then a
+            // gap and the single action. Six identical outlined buttons in a row read as a
+            // pile; grouping by what they do reads as three things.
+            //
+            // The labels are also fixed now. They used to swap between `Show X` and `Hide X`,
+            // so pressing one changed its own width and reflowed the whole row -- the same
+            // button was somewhere else the next time you reached for it. State is shown by
+            // fill instead, which is what a toggle is for.
+            _LayerToggles(
+              items: [
+                _LayerToggle(
+                  icon: Icons.label_rounded,
+                  label: 'Labels',
+                  active: labelsVisible,
+                  onTap: onToggleLabels,
+                ),
+                _LayerToggle(
+                  icon: Icons.timeline_rounded,
+                  label: 'Metrics',
+                  active: metricsVisible,
+                  onTap: onToggleMetrics,
+                ),
+                _LayerToggle(
+                  icon: Icons.hub_rounded,
+                  label: 'Paths',
+                  active: pathPanelVisible,
+                  onTap: onTogglePathPanel,
+                ),
+                _LayerToggle(
+                  icon: Icons.fact_check_rounded,
+                  label: 'Evidence',
+                  active: evidenceVisible,
+                  onTap: onToggleEvidence,
+                ),
+              ],
             ),
             _ShellOpacityControl(
               value: shellOpacity,
               onChanged: onShellOpacityChanged,
             ),
+            // The only action in the row, and the only filled control, held apart from the
+            // view toggles so it cannot be pressed by reflex while reaching for one.
+            const SizedBox(width: 10),
             _ToolButton(
               icon: Icons.verified_user_rounded,
               label: mode.isMrm ? 'MRM validate' : 'Recover validate',
@@ -965,6 +982,108 @@ class _BottomConsole extends StatelessWidget {
               onTap: onRecover,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One layer toggle inside the segmented group.
+class _LayerToggle {
+  const _LayerToggle({
+    required this.icon,
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+}
+
+/// The four view toggles as one control instead of four loose buttons.
+///
+/// A segmented group says "these are alternatives of the same kind" in a way a row of
+/// identical outlined buttons cannot, and it gives the row a fixed width, so nothing moves
+/// under the finger when a state changes.
+class _LayerToggles extends StatelessWidget {
+  const _LayerToggles({required this.items});
+
+  final List<_LayerToggle> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 36,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFD0D5DD)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < items.length; i++) ...[
+            if (i != 0)
+              Container(width: 1, height: 22, color: const Color(0xFFE4E7EC)),
+            _LayerToggleButton(item: items[i], first: i == 0, last: i == items.length - 1),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LayerToggleButton extends StatelessWidget {
+  const _LayerToggleButton({
+    required this.item,
+    required this.first,
+    required this.last,
+  });
+
+  final _LayerToggle item;
+  final bool first;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    final colour = item.active
+        ? const Color(0xFF1677FF)
+        : const Color(0xFF667085);
+    final radius = BorderRadius.horizontal(
+      left: Radius.circular(first ? 7 : 0),
+      right: Radius.circular(last ? 7 : 0),
+    );
+    return Material(
+      color: item.active ? const Color(0xFFEAF2FF) : Colors.transparent,
+      borderRadius: radius,
+      child: InkWell(
+        onTap: item.onTap,
+        borderRadius: radius,
+        child: Padding(
+          // A fixed 96 px slot per segment: the labels differ in length, and letting them
+          // size themselves is what made the row shuffle in the first place.
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: SizedBox(
+            width: 88,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(item.icon, color: colour, size: 15),
+                const SizedBox(width: 6),
+                Text(
+                  item.label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    color: colour,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
