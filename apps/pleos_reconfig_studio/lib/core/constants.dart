@@ -51,21 +51,21 @@ const List<LabelHotspotConfig> labelHotspots = [
   LabelHotspotConfig(
     slotName: 'inlineEspAB',
     label: 'ESP-AB\nA - B inline',
-    position: '0m 8m 14m',
+    position: '0m 11.5m 14m',
     dataTarget: '0m 5.6m 14m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   LabelHotspotConfig(
     slotName: 'inlineEspAR',
     label: 'ESP-AR\nA - R inline',
-    position: '1.25m 8m 5m',
+    position: '1.25m 9.6m 5m',
     dataTarget: '1.25m 5.6m 5m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
   LabelHotspotConfig(
     slotName: 'inlineEspBR',
     label: 'ESP-BR\nB - R inline',
-    position: '-1.25m 8m 5m',
+    position: '-1.25m 6.4m 5m',
     dataTarget: '-1.25m 5.6m 5m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
@@ -86,7 +86,7 @@ const List<LabelHotspotConfig> labelHotspots = [
   LabelHotspotConfig(
     slotName: 'lidarFR',
     label: 'LiDAR-FR',
-    position: '8.3m 10m 16.2m',
+    position: '11.8m 13.8m 16.2m',
     dataTarget: '8.3m 2m 16.2m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
@@ -100,7 +100,7 @@ const List<LabelHotspotConfig> labelHotspots = [
   LabelHotspotConfig(
     slotName: 'cameraFC',
     label: 'Camera-FC',
-    position: '0m 10.5m 18.5m',
+    position: '1.6m 16.2m 18.5m',
     dataTarget: '0m 2m 18.5m',
     dataOrbit: '135deg 45deg 2.5m',
   ),
