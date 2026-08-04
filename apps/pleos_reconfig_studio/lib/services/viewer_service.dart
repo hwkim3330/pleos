@@ -37,6 +37,13 @@ class ViewerService {
     await _controller?.runJavaScript('window.switchOrbit?.()');
   }
 
+  /// Absolute camera orbit in degrees, used by the tilt control.
+  Future<void> setCameraOrbit(double theta, double phi) async {
+    await _controller?.runJavaScript(
+      'window.setOrbit?.(${theta.toStringAsFixed(1)}, ${phi.toStringAsFixed(1)})',
+    );
+  }
+
   Future<void> resetCameraOrbit() async {
     await _controller?.runJavaScript('window.resetCamera?.()');
   }

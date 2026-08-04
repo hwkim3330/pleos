@@ -384,6 +384,15 @@ const String modelViewerScript = '''
             window.errorHotspotClicked = null;
         };
 
+        // Absolute orbit, for driving the camera from the tablet's own tilt.
+        //
+        // The viewer's interpolationDecay of 200 ms does the smoothing, so this only has to
+        // be called about ten times a second to look continuous -- evaluating JS through the
+        // WebView channel at frame rate would be wasteful and no smoother.
+        window.setOrbit = (theta, phi) => {
+            viewer.cameraOrbit = theta + 'deg ' + phi + 'deg 100%';
+        };
+
         window.resetCamera = () => {
             viewer.cameraOrbit = '45deg 65deg 100%';
             viewer.cameraTarget = 'auto 8m auto';

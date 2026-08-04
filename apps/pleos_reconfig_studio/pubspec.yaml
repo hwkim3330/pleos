@@ -43,6 +43,7 @@ dependencies:
   fl_chart: ^1.2.0
   webview_flutter: ^4.13.0
   flutter_blue_plus: ^2.3.10
+  sensors_plus: ^7.1.0
 
 dev_dependencies:
   flutter_test:

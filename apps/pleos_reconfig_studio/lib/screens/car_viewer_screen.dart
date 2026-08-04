@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:model_viewer_plus/model_viewer_plus.dart';
@@ -26,6 +29,49 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   /// give the vehicle and the path diagram room, and it is the panel an operator needs least
   /// while actually injecting a fault -- unlike the scenario rail, which is how you inject one.
   var _evidenceVisible = true;
+
+  /// Tilt-to-orbit, off by default.
+  ///
+  /// Deliberately opt-in: a console whose camera drifts every time somebody picks the tablet
+  /// up is worse than one that stays put, and while it is on the tilt owns the camera, so a
+  /// finger drag would just be fought. One control, one owner.
+  var _tiltEnabled = false;
+  StreamSubscription<AccelerometerEvent>? _tiltSubscription;
+
+  /// Low-passed gravity vector. Raw accelerometer output jitters by a degree or two at rest,
+  /// which on a camera reads as a shake.
+  double _gravityX = 0;
+  double _gravityY = 0;
+  DateTime _lastOrbitAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _toggleTilt() {
+    setState(() => _tiltEnabled = !_tiltEnabled);
+    if (!_tiltEnabled) {
+      _tiltSubscription?.cancel();
+      _tiltSubscription = null;
+      ref.read(viewerServiceProvider).resetCameraOrbit();
+      return;
+    }
+    _tiltSubscription = accelerometerEventStream().listen((event) {
+      // Exponential smoothing, then clamp. The clamp matters as much as the smoothing: the
+      // vehicle should never end up upside down or looking at its own back, so tilt moves the
+      // camera within a window around the opening three-quarter view rather than mapping the
+      // whole sphere.
+      const alpha = 0.15;
+      _gravityX = _gravityX + alpha * (event.x - _gravityX);
+      _gravityY = _gravityY + alpha * (event.y - _gravityY);
+
+      final now = DateTime.now();
+      if (now.difference(_lastOrbitAt) < const Duration(milliseconds: 90)) return;
+      _lastOrbitAt = now;
+
+      // Landscape tablet: x is the long axis, y the short one. 9.8 is 1 g, so dividing by it
+      // gives roughly the sine of the tilt.
+      final theta = (45 + (_gravityX / 9.8) * 45).clamp(5.0, 85.0);
+      final phi = (65 - (_gravityY / 9.8) * 25).clamp(45.0, 85.0);
+      ref.read(viewerServiceProvider).setCameraOrbit(theta, phi);
+    });
+  }
   var _shellOpacity = 0.15;
   _ScenarioDef _selectedScenario = _ScenarioDef.values.first;
 
@@ -114,6 +160,12 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
     'dualFront': {'tsn_front_a': 'FAULT', 'tsn_front_b': 'FAULT'},
     'allPaths': {'tsn_front_a': 'FAULT', 'tsn_front_b': 'FAULT', 'tsn_rear': 'FAULT'},
   };
+
+  @override
+  void dispose() {
+    _tiltSubscription?.cancel();
+    super.dispose();
+  }
 
   Future<void> _applyScenario(_ScenarioDef scenario) async {
     setState(() => _selectedScenario = scenario);
@@ -289,6 +341,7 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               metricsVisible: _metricsVisible,
               pathPanelVisible: _pathPanelVisible,
               evidenceVisible: _evidenceVisible,
+              tiltEnabled: _tiltEnabled,
               shellOpacity: _shellOpacity,
               mode: mode,
               onToggleLabels: _toggleLabels,
@@ -298,6 +351,7 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
                   setState(() => _pathPanelVisible = !_pathPanelVisible),
               onToggleEvidence: () =>
                   setState(() => _evidenceVisible = !_evidenceVisible),
+              onToggleTilt: _toggleTilt,
               onShellOpacityChanged: (value) {
                 setState(() => _shellOpacity = value);
                 ref.read(viewerServiceProvider).setVehicleShellOpacity(value);
@@ -898,12 +952,14 @@ class _BottomConsole extends StatelessWidget {
     required this.metricsVisible,
     required this.pathPanelVisible,
     required this.evidenceVisible,
+    required this.tiltEnabled,
     required this.shellOpacity,
     required this.mode,
     required this.onToggleLabels,
     required this.onToggleMetrics,
     required this.onTogglePathPanel,
     required this.onToggleEvidence,
+    required this.onToggleTilt,
     required this.onShellOpacityChanged,
     required this.onRecover,
   });
@@ -912,12 +968,14 @@ class _BottomConsole extends StatelessWidget {
   final bool metricsVisible;
   final bool pathPanelVisible;
   final bool evidenceVisible;
+  final bool tiltEnabled;
   final double shellOpacity;
   final _ReconfigMode mode;
   final VoidCallback onToggleLabels;
   final VoidCallback onToggleMetrics;
   final VoidCallback onTogglePathPanel;
   final VoidCallback onToggleEvidence;
+  final VoidCallback onToggleTilt;
   final ValueChanged<double> onShellOpacityChanged;
   final VoidCallback onRecover;
 
@@ -965,6 +1023,12 @@ class _BottomConsole extends StatelessWidget {
                   label: 'Evidence',
                   active: evidenceVisible,
                   onTap: onToggleEvidence,
+                ),
+                _LayerToggle(
+                  icon: Icons.screen_rotation_rounded,
+                  label: 'Tilt',
+                  active: tiltEnabled,
+                  onTap: onToggleTilt,
                 ),
               ],
             ),
