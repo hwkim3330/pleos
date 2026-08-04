@@ -89,6 +89,7 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   Duration? _lastCommandRoundTrip;
   DateTime? _nodeLostAt;
   Duration? _lastHeal;
+  bool _nodesHeldOnce = false;
 
   /// Starts the clock for the next relay confirmation. `intent` is the channel state the
   /// action is expected to produce; the clock stops when the controller reports it.
@@ -115,14 +116,25 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
 
     // A node dropping and coming back is the self-heal. Timed end to end here rather than
     // quoting a number from the firmware's point of view.
+    //
+    // Two things must be true before a missing node counts as a loss, or the panel reports
+    // its own startup as a self-heal. The service seeds both nodes offline, which looks
+    // exactly like a real loss; and with no gateway link we have nobody to ask about the
+    // nodes at all. So: only while connected, and only once we have actually held them.
+    // Same guard as the controller's own watchdog -- you cannot lose what you never had.
     final nodes = hardware.pathNodes;
-    if (nodes.isNotEmpty) {
+    if (!hardware.connected) {
+      _nodeLostAt = null;
+    } else if (nodes.isNotEmpty) {
       final anyLost = nodes.values.any((online) => !online);
-      if (anyLost && _nodeLostAt == null) {
+      if (!anyLost) {
+        _nodesHeldOnce = true;
+        if (_nodeLostAt != null) {
+          _lastHeal = DateTime.now().difference(_nodeLostAt!);
+          _nodeLostAt = null;
+        }
+      } else if (_nodesHeldOnce && _nodeLostAt == null) {
         _nodeLostAt = DateTime.now();
-      } else if (!anyLost && _nodeLostAt != null) {
-        _lastHeal = DateTime.now().difference(_nodeLostAt!);
-        _nodeLostAt = null;
       }
     }
   }
@@ -671,9 +683,15 @@ class _EvidencePanel extends StatelessWidget {
           _EvidenceBlock(
             title: 'Reconfiguration',
             lines: [
+              // The action is what this scenario intends. The two lines under it are what
+              // the gateway actually reports -- so with no link they say "not read"
+              // rather than echoing the scenario table back as if it were a measurement.
               scenario.action,
-              'Mode: ${mode.name}',
-              'MRM: ${scenario.mrmPolicy}',
+              if (hardware.connected) ...[
+                'Mode: ${mode.name}',
+                'MRM: ${mode.isMrm ? 'engaged' : 'standby'}',
+              ] else
+                'Mode / MRM: not read -- no gateway link',
             ],
           ),
           _EvidenceBlock(title: 'Measured now', lines: _liveMetrics),
