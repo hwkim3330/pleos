@@ -41,6 +41,7 @@ class HardwareReconfigService {
   StreamSubscription<List<int>>? _valueSubscription;
   Timer? _retry;
   Timer? _bleRetry;
+  Timer? _gatewaySilence;
   bool _disposed = false;
   bool _bleConnecting = false;
   bool _gattConnecting = false;
@@ -172,6 +173,7 @@ class HardwareReconfigService {
           // A failed resync write is not fatal here: the next gap retries it.
           _requestSync().ignore();
         }
+        _armGatewaySilenceTimer();
         _bleSequence = sequence;
         _bleMode = fields[2];
         _bleIoNodeConnected = fields[3] == 'ONLINE';
@@ -217,7 +219,35 @@ class HardwareReconfigService {
     await control.write(utf8.encode('!SYNC'), withoutResponse: false);
   }
 
+  /// The controller sends a !STATE: every second. Going quiet for much longer than that means
+  /// the link is useless even while Android still reports it connected -- which is exactly
+  /// what a wedged controller looks like from here: notifications stop, the GATT link stays
+  /// up, and nothing arrives to correct the console. Without this the header sat green on a
+  /// snapshot minutes old and the timing chips kept quoting a measurement taken before the
+  /// gateway died. Silence is now treated as a lost link and torn down so the reconnect path
+  /// runs.
+  static const _gatewaySilenceLimit = Duration(seconds: 5);
+
+  void _armGatewaySilenceTimer() {
+    _gatewaySilence?.cancel();
+    if (_disposed) return;
+    _gatewaySilence = Timer(_gatewaySilenceLimit, _onGatewaySilent);
+  }
+
+  Future<void> _onGatewaySilent() async {
+    if (_disposed || _bleControl == null) return;
+    // Captured before the teardown clears it.
+    final device = _bleDevice;
+    _bleDisconnected();
+    try {
+      await device?.disconnect();
+    } catch (_) {
+      // Already gone. The rescan scheduled by _bleDisconnected is what matters.
+    }
+  }
+
   void _bleDisconnected() {
+    _gatewaySilence?.cancel();
     _bleControl = null;
     _bleDevice = null;
     _gattConnecting = false;
@@ -227,6 +257,15 @@ class HardwareReconfigService {
     _lastSyncRequestAt = null;
     for (final name in _blePathNodes.keys) {
       _blePathNodes[name] = false;
+    }
+    // Say so. This used to tear down the internals silently, so the console kept the last
+    // live state on screen -- green header, path nodes still ACK -- with no link behind it.
+    // Guarded the same way the bridge path guards its own drop: never blank out a state that
+    // the other transport is still feeding.
+    if (!_disposed && _socket == null) {
+      _states.add(
+        const HardwareReconfigState(event: 'Gateway link lost'),
+      );
     }
     if (!_disposed) {
       _bleRetry?.cancel();
@@ -344,6 +383,7 @@ class HardwareReconfigService {
     _disposed = true;
     _retry?.cancel();
     _bleRetry?.cancel();
+    _gatewaySilence?.cancel();
     if (directBle) await FlutterBluePlus.stopScan();
     await _scanSubscription?.cancel();
     await _connectionSubscription?.cancel();

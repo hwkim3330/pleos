@@ -981,8 +981,14 @@ class _TimelinePanel extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 14),
+            // Not "command -> relay", which is what this used to claim. The clock stops when
+            // the gateway echoes its own channel state, and at that instant the gateway has
+            // not yet told the node anything -- it pushes to the nodes later, from loop().
+            // The relay follows within a tick or two of that. Reading the real relay time
+            // needs the node's `applied` over BLE, which today only rides the CBOR/serial
+            // link, so it cannot be measured from here without a firmware change.
             _MetricChip(
-              label: 'command → relay',
+              label: 'command → gateway',
               value: roundTrip == null
                   ? '--'
                   : '${roundTrip.inMilliseconds} ms',
