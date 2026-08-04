@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <esp_display_panel.hpp>
 #include <esp_now.h>
+#include <esp_task_wdt.h>
 #include <esp_wifi.h>
 #include <lvgl.h>
 
@@ -18,6 +19,8 @@ namespace {
 
 constexpr uint8_t kProtocolVersion = 1;
 constexpr uint32_t kHeartbeatMs = 1000;
+// Far above any legitimate loop pass; this only ever fires on a genuine stall.
+constexpr uint32_t kLoopWatchdogMs = 30000;
 constexpr uint32_t kEspNowPeriodMs = 200;
 constexpr uint32_t kEspNowUrgentPeriodMs = 20;
 constexpr uint32_t kEspNowDiscoveryMs = 500;
@@ -354,7 +357,14 @@ void sendEspNowState() {
       const String command = force
           ? String("!FORCE:") + commandId + ":" + (desired ? "FAULT" : "SAFE")
           : String("!SET:") + commandId + ":" + (desired ? "FAULT" : "SAFE");
-      if (pathBleControls[index]->writeValue(command, true)) {
+      // Write WITHOUT response. With response this call blocks inside the GATT stack until
+      // the node answers, and it runs from loop() -- so a node that stops answering takes
+      // the heartbeat, the node-link watchdog and the advertising re-arm down with it. That
+      // is exactly how the controller went mute under a burst of tablet commands: the link
+      // stayed up, seq froze, and nothing recovered because everything that recovers lives
+      // in loop(). Losing a write costs nothing here: this push repeats every 200 ms while
+      // applied != desired, so a dropped command self-corrects on the next tick.
+      if (pathBleControls[index]->writeValue(command, false)) {
         pathBleCommandAt[index] = now;
         pathForceNext[index] = false;
       }
@@ -1505,10 +1515,28 @@ void setup() {
   lvgl_port_lock(-1);
   createUi();
   lvgl_port_unlock();
+  // The real backstop, and the one lesson from the mute-controller failure: a watchdog that
+  // lives inside loop() cannot save a blocked loop(). checkNodeLinkWatchdog() escaped a
+  // wedged reconnect task, but when loop() itself blocked in a GATT call nothing was left
+  // running to notice. This timer is not in loop() -- it is hardware, and it panics into a
+  // reboot if loop() stops feeding it. The timeout is deliberately far above any legitimate
+  // pass (LVGL redraws, blocking node polls, 8 s of scanning) so it can only fire on a
+  // genuine stall, never on a slow but healthy tick.
+  esp_task_wdt_config_t wdtConfig = {
+      .timeout_ms = kLoopWatchdogMs,
+      .idle_core_mask = 0,
+      .trigger_panic = true,
+  };
+  if (esp_task_wdt_init(&wdtConfig) == ESP_ERR_INVALID_STATE) {
+    // Already started by the IDF with its own settings; take it over.
+    esp_task_wdt_reconfigure(&wdtConfig);
+  }
+  esp_task_wdt_add(nullptr);
   sendState("hello");
 }
 
 void loop() {
+  esp_task_wdt_reset();
   checkNodeLinkWatchdog();
   readCommands();
   readIoNode();
