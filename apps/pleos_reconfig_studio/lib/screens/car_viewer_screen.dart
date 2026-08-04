@@ -10,7 +10,9 @@ import '../core/js_scripts.dart';
 import '../models/fault_data.dart';
 import '../providers/fault_provider.dart';
 import '../providers/hardware_reconfig_provider.dart';
+import '../providers/vehicle_position_provider.dart';
 import '../services/hardware_reconfig_service.dart';
+import '../services/vehicle_position_service.dart';
 import '../providers/viewer_service_provider.dart';
 
 class CarViewerScreen extends ConsumerStatefulWidget {
@@ -257,6 +259,9 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
     final hardware =
         ref.watch(hardwareReconfigProvider).valueOrNull ??
         const HardwareReconfigState();
+    final vehiclePosition =
+        ref.watch(vehiclePositionProvider).valueOrNull ??
+        const VehiclePosition(status: PositionStatus.idle);
     _observe(hardware);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _showPathAlert(hardware),
@@ -318,6 +323,7 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
                 mode: mode,
                 faults: faults,
                 hardware: hardware,
+                vehiclePosition: vehiclePosition,
               ),
             ),
           if (_pathPanelVisible)
@@ -569,12 +575,14 @@ class _EvidencePanel extends StatelessWidget {
     required this.mode,
     required this.faults,
     required this.hardware,
+    required this.vehiclePosition,
   });
 
   final _ScenarioDef scenario;
   final _ReconfigMode mode;
   final List<FaultData> faults;
   final HardwareReconfigState hardware;
+  final VehiclePosition vehiclePosition;
 
   static const _linkNames = {
     'tsn_front_a': 'Path 1 (F-A to R)',
@@ -613,6 +621,32 @@ class _EvidencePanel extends StatelessWidget {
     return lines;
   }
 
+  List<String> get _positionLines {
+    final position = vehiclePosition.position;
+    if (!vehiclePosition.hasFix || position == null) {
+      return [
+        switch (vehiclePosition.status) {
+          PositionStatus.denied => 'No fix -- location permission not granted',
+          PositionStatus.serviceOff => 'No fix -- location is off on the tablet',
+          PositionStatus.waiting => 'Waiting for a fix',
+          PositionStatus.failed => 'No fix -- ${vehiclePosition.detail}',
+          _ => 'No fix yet',
+        },
+      ];
+    }
+    final lines = [
+      '${position.latitude.toStringAsFixed(6)}, '
+          '${position.longitude.toStringAsFixed(6)}',
+      'Accuracy ${position.accuracy.toStringAsFixed(1)} m'
+          '${position.altitude != 0 ? ', altitude ${position.altitude.toStringAsFixed(0)} m' : ''}',
+      'Speed ${(position.speed * 3.6).toStringAsFixed(1)} km/h',
+    ];
+    if (vehiclePosition.detail.isNotEmpty) {
+      lines.add('Source: ${vehiclePosition.detail}');
+    }
+    return lines;
+  }
+
   @override
   Widget build(BuildContext context) {
     return _Glass(
@@ -643,6 +677,9 @@ class _EvidencePanel extends StatelessWidget {
             ],
           ),
           _EvidenceBlock(title: 'Measured now', lines: _liveMetrics),
+          // Its own block, deliberately. The rig runs fine with no fix, so a missing
+          // position must never read as a network fault sitting among the link states.
+          _EvidenceBlock(title: 'Vehicle position', lines: _positionLines),
           _EvidenceBlock(
             title: 'Report mapping',
             lines: scenario.reportMapping,

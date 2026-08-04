@@ -10,7 +10,15 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <!-- Uncapped, and declared once. It used to carry maxSdkVersion="30" because it was
+         needed only for BLE scanning before Android 12, which meant the permission could
+         never be granted on this tablet (Android 14) and the vehicle position could never
+         be read. Declaring it twice, capped and uncapped, fails the manifest merger, so
+         the cap is simply gone: an uncapped permission covers the old BLE case too.
+         (Note for the next editor: XML comments cannot contain a double hyphen, which is
+         how this file was briefly made unparseable.) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
