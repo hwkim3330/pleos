@@ -22,6 +22,10 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
   var _lastAlertSequence = -1;
   var _metricsVisible = true;
   var _pathPanelVisible = false;
+  /// The evidence column is 318 px of mostly-static text. Hiding it is the cheapest way to
+  /// give the vehicle and the path diagram room, and it is the panel an operator needs least
+  /// while actually injecting a fault -- unlike the scenario rail, which is how you inject one.
+  var _evidenceVisible = true;
   var _shellOpacity = 0.15;
   _ScenarioDef _selectedScenario = _ScenarioDef.values.first;
 
@@ -252,21 +256,23 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               onSelected: _applyScenario,
             ),
           ),
-          Positioned(
-            right: 14,
-            top: 78,
-            bottom: 118,
-            child: _EvidencePanel(
-              scenario: _selectedScenario,
-              mode: mode,
-              faults: faults,
-              hardware: hardware,
+          if (_evidenceVisible)
+            Positioned(
+              right: 14,
+              top: 78,
+              bottom: 118,
+              child: _EvidencePanel(
+                scenario: _selectedScenario,
+                mode: mode,
+                faults: faults,
+                hardware: hardware,
+              ),
             ),
-          ),
           if (_pathPanelVisible)
             Positioned(
               left: 248,
-              right: 348,
+              // Take the evidence column's room when it is hidden rather than leaving a gap.
+              right: _evidenceVisible ? 348 : 14,
               bottom: 118,
               child: _ModeCard(
                 mode: mode,
@@ -282,6 +288,7 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
               labelsVisible: _labelsVisible,
               metricsVisible: _metricsVisible,
               pathPanelVisible: _pathPanelVisible,
+              evidenceVisible: _evidenceVisible,
               shellOpacity: _shellOpacity,
               mode: mode,
               onToggleLabels: _toggleLabels,
@@ -289,6 +296,8 @@ class _CarViewerScreenState extends ConsumerState<CarViewerScreen> {
                   setState(() => _metricsVisible = !_metricsVisible),
               onTogglePathPanel: () =>
                   setState(() => _pathPanelVisible = !_pathPanelVisible),
+              onToggleEvidence: () =>
+                  setState(() => _evidenceVisible = !_evidenceVisible),
               onShellOpacityChanged: (value) {
                 setState(() => _shellOpacity = value);
                 ref.read(viewerServiceProvider).setVehicleShellOpacity(value);
@@ -682,6 +691,7 @@ class _ModeCard extends StatelessWidget {
     return Align(
       alignment: Alignment.bottomLeft,
       child: _Glass(
+        opaque: true,
         width: 430,
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -885,11 +895,13 @@ class _BottomConsole extends StatelessWidget {
     required this.labelsVisible,
     required this.metricsVisible,
     required this.pathPanelVisible,
+    required this.evidenceVisible,
     required this.shellOpacity,
     required this.mode,
     required this.onToggleLabels,
     required this.onToggleMetrics,
     required this.onTogglePathPanel,
+    required this.onToggleEvidence,
     required this.onShellOpacityChanged,
     required this.onRecover,
   });
@@ -897,11 +909,13 @@ class _BottomConsole extends StatelessWidget {
   final bool labelsVisible;
   final bool metricsVisible;
   final bool pathPanelVisible;
+  final bool evidenceVisible;
   final double shellOpacity;
   final _ReconfigMode mode;
   final VoidCallback onToggleLabels;
   final VoidCallback onToggleMetrics;
   final VoidCallback onTogglePathPanel;
+  final VoidCallback onToggleEvidence;
   final ValueChanged<double> onShellOpacityChanged;
   final VoidCallback onRecover;
 
@@ -933,6 +947,12 @@ class _BottomConsole extends StatelessWidget {
               label: pathPanelVisible ? 'Hide Path Panel' : 'Show Path Panel',
               active: pathPanelVisible,
               onTap: onTogglePathPanel,
+            ),
+            _ToolButton(
+              icon: Icons.fact_check_rounded,
+              label: evidenceVisible ? 'Hide Evidence' : 'Show Evidence',
+              active: evidenceVisible,
+              onTap: onToggleEvidence,
             ),
             _ShellOpacityControl(
               value: shellOpacity,
@@ -1268,11 +1288,17 @@ class _Glass extends StatelessWidget {
     required this.child,
     this.width,
     this.padding = const EdgeInsets.all(12),
+    this.opaque = false,
   });
 
   final Widget child;
   final double? width;
   final EdgeInsetsGeometry padding;
+
+  /// Fully opaque instead of the usual 94%. Panels that sit over the vehicle rather than
+  /// beside it need this: with the 3D labels showing, translucency let the label text bleed
+  /// through the panel and neither was readable.
+  final bool opaque;
 
   @override
   Widget build(BuildContext context) {
@@ -1280,7 +1306,9 @@ class _Glass extends StatelessWidget {
       width: width,
       padding: padding,
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFFFF).withValues(alpha: 0.94),
+        color: opaque
+            ? const Color(0xFFFFFFFF)
+            : const Color(0xFFFFFFFF).withValues(alpha: 0.94),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFD0D5DD)),
         boxShadow: [
